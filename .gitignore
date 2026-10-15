@@ -1,0 +1,6 @@
+dist/
+*.exe
+*.zip
+*.bak
+.vs/
+*.user

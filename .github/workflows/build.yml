@@ -1,0 +1,38 @@
+name: build
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Mono compiler
+        run: sudo apt-get update && sudo apt-get install -y mono-mcs mono-devel libmono-system-windows-forms4.0-cil libgdiplus
+      - name: Build
+        run: ./build.sh
+      - name: Self-test (Navy MINIMUF 3.5 sample + NOAA parsers)
+        run: N1TA_QUIET=1 mono dist/N1TA_MOFLOF.exe --selftest
+      - name: Package
+        run: |
+          mkdir -p pkg && cp dist/N1TA_MOFLOF.exe README.md LICENSE THIRD_PARTY.md pkg/
+          (cd pkg && zip -9 ../N1TA_MOFLOF-${GITHUB_REF_NAME//\//-}.zip *)
+          sha256sum N1TA_MOFLOF-*.zip dist/N1TA_MOFLOF.exe | tee SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: N1TA_MOFLOF
+          path: |
+            N1TA_MOFLOF-*.zip
+            SHA256SUMS.txt
+      - name: Attach to GitHub Release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            N1TA_MOFLOF-*.zip
+            SHA256SUMS.txt
+          body_path: docs/RELEASE_NOTES.md
