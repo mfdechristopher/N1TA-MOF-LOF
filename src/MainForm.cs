@@ -59,7 +59,8 @@ namespace N1TA.MofLof
     public class MainForm : Form
     {
         // ---- state ----
-        double qLat = 42.2, qLon = -72.6;            // Springfield, MA-ish default; user changes it
+        string qGrid = ""; double qLat, qLon;          // set from the grid square the user enters at startup
+        const double MiPerKm = 0.621371;
         DateTime T = DateTime.UtcNow;
         bool live = true, auto = true;
         double manSfi = 120, manA = 8, manK = 2;
@@ -73,34 +74,42 @@ namespace N1TA.MofLof
 
         // ---- ui ----
         MapView map = new MapView(); Label info = new Label(); Legend legend = new Legend();
-        StatusBar sb = new StatusBar(); StatusBarPanel pRead = new StatusBarPanel(), pNoaa = new StatusBarPanel();
+        StatusBar sb = new StatusBar(); StatusBarPanel pNoaa = new StatusBarPanel(); Label readout = new Label();
         System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer(), anim = new System.Windows.Forms.Timer(), rsz = new System.Windows.Forms.Timer();
-        MenuItem miLive, miAuto, miManual, miAnim; MenuItem[] miMode, miProj, miRes; MenuItem miSun, miRad, miGrid;
+        MenuItem miLive, miAnim; MenuItem[] miMode, miProj, miRes; MenuItem miSun, miRad, miGrid;
         // layout of last render
         int ox, oy, mw, mh, cx, cy; double rad;
         DateTime lastNoaaTry = DateTime.MinValue;
 
         public MainForm()
         {
-            Text = "N1TA MOF/LOF"; ClientSize = new Size(820, 470); MinimumSize = new Size(480, 320);
+            Text = "N1TA MOF/LOF"; ClientSize = new Size(900, 560); MinimumSize = new Size(560, 380);
             KeyPreview = true; StartPosition = FormStartPosition.CenterScreen;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             LoadSettings(); LoadCoast();
 
             info.Dock = DockStyle.Top; info.Height = 20; info.Font = new Font("Courier New", 9f); info.TextAlign = ContentAlignment.MiddleLeft;
-            sb.ShowPanels = true; pRead.AutoSize = StatusBarPanelAutoSize.Spring; pRead.MinWidth = 330; pNoaa.AutoSize = StatusBarPanelAutoSize.Contents;
-            sb.Panels.Add(pRead); sb.Panels.Add(pNoaa);
-            Controls.Add(map); Controls.Add(legend); Controls.Add(info); Controls.Add(sb);
+            readout.Dock = DockStyle.Bottom; readout.Height = 36; readout.Font = new Font("Courier New", 9f); readout.Padding = new Padding(4, 2, 0, 0);
+            sb.ShowPanels = true; pNoaa.AutoSize = StatusBarPanelAutoSize.Spring; sb.Panels.Add(pNoaa);
+            Controls.Add(map); Controls.Add(legend); Controls.Add(readout); Controls.Add(info); Controls.Add(sb);
             map.BringToFront();
             BuildMenu();
-            map.MouseMove += OnMouse; map.MouseLeave += delegate { pRead.Text = ""; };
+            map.MouseMove += OnMouse; map.MouseLeave += delegate { readout.Text = ""; };
             map.MouseDown += delegate { map.Focus(); };
             map.SizeChanged += delegate { rsz.Stop(); rsz.Start(); };
+            sb.PanelClick += delegate { ShowStart(false); };
             rsz.Interval = 120; rsz.Tick += delegate { rsz.Stop(); Redraw(); };
             tick.Interval = 15000; tick.Tick += OnTick; tick.Start();
             anim.Interval = 700; anim.Tick += delegate { Advance(1); };
-            Shown += delegate { if (live) T = DateTime.UtcNow; Recompute(); if (auto) FetchAsync(); };
+            Shown += delegate { BeginInvoke(new MethodInvoker(Startup)); };
             FormClosing += delegate { SaveSettings(); };
+        }
+
+        // Ask for the grid square every time the program opens (pre-filled with last time's answer).
+        void Startup()
+        {
+            if (live) T = DateTime.UtcNow;
+            ShowStart(true);
         }
 
         // ================= menu =================
@@ -113,19 +122,17 @@ namespace N1TA.MofLof
             file.MenuItems.Add(new MenuItem("E&xit", delegate { Close(); }));
 
             MenuItem calc = new MenuItem("&Calculations");
-            calc.MenuItems.Add(new MenuItem("&Start...", delegate { ShowStart(); }, Shortcut.CtrlS));
+            calc.MenuItems.Add(new MenuItem("&Location, date and solar data...", delegate { ShowStart(false); }, Shortcut.CtrlS));
+            calc.MenuItems.Add(new MenuItem("-"));
             calc.MenuItems.Add(new MenuItem("&Next hour\tEnter", delegate { Advance(1); }));
             calc.MenuItems.Add(new MenuItem("&Previous hour\tBackspace", delegate { Advance(-1); }));
             miAnim = new MenuItem("&Animate\tA", delegate { ToggleAnim(); }); calc.MenuItems.Add(miAnim);
-            miLive = new MenuItem("&Live (follow UTC clock)\tL", delegate { SetLive(!live); }); calc.MenuItems.Add(miLive);
+            miLive = new MenuItem("L&ive (follow UTC clock)\tL", delegate { SetLive(!live); }); calc.MenuItems.Add(miLive);
             calc.MenuItems.Add(new MenuItem("-"));
-            miAuto = new MenuItem("NOAA data: &automatic", delegate { SetAuto(true); });
-            miManual = new MenuItem("NOAA data: &manual", delegate { SetAuto(false); });
-            calc.MenuItems.Add(miAuto); calc.MenuItems.Add(miManual);
             calc.MenuItems.Add(new MenuItem("&Refresh NOAA data now\tF5", delegate { FetchAsync(); }));
 
             MenuItem disp = new MenuItem("&Display");
-            string[] names = { "1  Short path MOF", "2  Long path MOF", "3  Composite MOF", "4  Short path LOF", "5  Long path LOF", "6  Composite LOF", "7  3000 km single-hop MOF", "8  3000 km single-hop LOF" };
+            string[] names = { "1  Short path MOF", "2  Long path MOF", "3  Composite MOF", "4  Short path LOF", "5  Long path LOF", "6  Composite LOF", "7  3000 km (1864 mi) single-hop MOF", "8  3000 km (1864 mi) single-hop LOF" };
             miMode = new MenuItem[names.Length];
             for (int i = 0; i < names.Length; i++)
             {
@@ -151,6 +158,7 @@ namespace N1TA.MofLof
 
             MenuItem help = new MenuItem("&Help");
             help.MenuItems.Add(new MenuItem("&Notes", delegate { MessageBox.Show(this, HelpText.Notes, "N1TA MOF/LOF - Notes"); }));
+            help.MenuItems.Add(new MenuItem("NOAA &diagnostics", delegate { ShowDiag(); }));
             help.MenuItems.Add(new MenuItem("&About", delegate { MessageBox.Show(this, HelpText.About, "About N1TA MOF/LOF"); }));
             m.MenuItems.AddRange(new MenuItem[] { file, calc, disp, help });
             Menu = m; SyncMenu();
@@ -161,7 +169,7 @@ namespace N1TA.MofLof
             for (int i = 0; i < miProj.Length; i++) miProj[i].Checked = (int)proj == i;
             double[] steps = { 2, 4, 6, 9 }; for (int i = 0; i < miRes.Length; i++) miRes[i].Checked = steps[i] == step;
             miSun.Checked = ovSun; miRad.Checked = ovRadials; miGrid.Checked = ovGrid;
-            miLive.Checked = live; miAuto.Checked = auto; miManual.Checked = !auto; miAnim.Checked = anim.Enabled;
+            miLive.Checked = live; miAnim.Checked = anim.Enabled;
         }
         protected override void OnKeyDown(KeyEventArgs e)
         {
@@ -184,7 +192,6 @@ namespace N1TA.MofLof
         void SetMode(Mode m) { mode = m; Redraw(); SyncMenu(); }
         void SetProj(Proj p) { proj = p; Redraw(); SyncMenu(); }
         void SetLive(bool v) { live = v; if (live) { T = DateTime.UtcNow; Recompute(); } SyncMenu(); }
-        void SetAuto(bool v) { auto = v; if (auto) FetchAsync(); else Recompute(); SyncMenu(); }
         void ToggleAnim() { anim.Enabled = !anim.Enabled; if (anim.Enabled) live = false; SyncMenu(); }
         void Advance(int hours) { live = false; T = T.AddHours(hours); Recompute(); SyncMenu(); }
         void OnTick(object s, EventArgs e)
@@ -194,18 +201,46 @@ namespace N1TA.MofLof
             if (n.Minute != T.Minute || n.Hour != T.Hour || n.Date != T.Date) { T = n; Recompute(); }
             if (auto && (DateTime.UtcNow - noaaWhen).TotalMinutes > 30 && (DateTime.UtcNow - lastNoaaTry).TotalMinutes > 5) FetchAsync();
         }
-        void ShowStart()
+        bool ShowStart(bool startup)
         {
-            using (StartDialog d = new StartDialog(qLat, qLon, T, auto, live, manSfi, manA, manK, noaa))
+            using (StartDialog d = new StartDialog(qGrid, T, live, auto, manSfi, manA, manK, noaa, outlook, startup))
             {
-                if (d.ShowDialog(this) != DialogResult.OK) return;
-                qLat = d.Lat; qLon = d.Lon; T = d.When; auto = d.Auto; live = d.Live;
+                if (d.ShowDialog(this) != DialogResult.OK)
+                {
+                    if (startup)
+                    {
+                        if (qGrid.Length == 0) { Close(); return false; }    // first run and no location: nothing to draw
+                        Recompute(); if (auto) FetchAsync();
+                    }
+                    return false;
+                }
+                qGrid = d.GridText; qLat = d.Lat; qLon = d.Lon; T = d.When; auto = d.Auto; live = d.Live;
                 manSfi = d.Sfi; manA = d.A; manK = d.K;
-                if (d.Fetched != null && d.Fetched.Complete) { noaa = d.Fetched; noaaWhen = DateTime.UtcNow; noaaStatus = "NOAA: " + noaa.Note + " " + noaaWhen.ToString("HH:mm") + "Z"; }
-                if (live) T = DateTime.UtcNow;
+                if (d.FetchedCurrent != null) { MergeNoaa(d.FetchedCurrent); }
+                if (d.FetchedOutlook != null) outlook = d.FetchedOutlook;
+                SaveSettings();
                 Recompute(); SyncMenu();
-                if (auto && !live && T.Date > DateTime.UtcNow.Date) FetchAsync();
+                if (auto) FetchAsync();
+                return true;
             }
+        }
+        void ShowDiag()
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "NOAA diagnostics"; f.ClientSize = new Size(760, 400); f.StartPosition = FormStartPosition.CenterParent;
+                TextBox t = new TextBox(); t.Multiline = true; t.ReadOnly = true; t.ScrollBars = ScrollBars.Both; t.WordWrap = false; t.Dock = DockStyle.Fill; t.Font = new Font("Courier New", 9f);
+                t.Text = "Copy this into a GitHub issue if NOAA data does not load.\r\n\r\nCurrent: SFI " + F(noaa.Sfi) + "  A " + F(noaa.A) + "  K " + F(noaa.K) + "   status: " + noaaStatus + "\r\n\r\n" + Noaa.LogText().Replace("\n", "\r\n");
+                f.Controls.Add(t); t.Select(0, 0); f.ShowDialog(this);
+            }
+        }
+        static string F(double v) { return double.IsNaN(v) ? "-" : v.ToString("0.##", CultureInfo.InvariantCulture); }
+        void MergeNoaa(SpaceWx w)
+        {
+            if (!double.IsNaN(w.Sfi)) noaa.Sfi = w.Sfi; if (!double.IsNaN(w.A)) noaa.A = w.A; if (!double.IsNaN(w.K)) noaa.K = w.K;
+            noaa.Note = w.Note;
+            if (w.Complete) { noaaWhen = DateTime.UtcNow; noaaStatus = "NOAA: ok " + noaaWhen.ToString("HH:mm") + "Z"; }
+            else noaaStatus = "NOAA: " + w.Note;
         }
         void SaveBmp()
         {
@@ -221,7 +256,7 @@ namespace N1TA.MofLof
         void FetchAsync()
         {
             lastNoaaTry = DateTime.UtcNow;
-            pNoaa.Text = "NOAA: fetching..."; bool needOutlook = T.Date > DateTime.UtcNow.Date;
+            pNoaa.Text = "NOAA: fetching..."; bool needOutlook = T.Date > DateTime.UtcNow.Date || live == false;
             Thread t = new Thread(delegate ()
             {
                 SpaceWx w = null; List<OutlookRow> o = null; string err = null;
@@ -233,31 +268,23 @@ namespace N1TA.MofLof
         }
         void FetchDone(SpaceWx w, List<OutlookRow> o, string err)
         {
-            if (w != null)
-            {
-                if (!double.IsNaN(w.Sfi)) noaa.Sfi = w.Sfi; if (!double.IsNaN(w.A)) noaa.A = w.A; if (!double.IsNaN(w.K)) noaa.K = w.K;
-                noaa.Note = w.Note;
-                if (w.Complete) { noaaWhen = DateTime.UtcNow; noaaStatus = "NOAA: ok " + noaaWhen.ToString("HH:mm") + "Z"; }
-                else if (w.Note != "NOAA SWPC") noaaStatus = "NOAA: unreachable";
-                else noaaStatus = "NOAA: incomplete data";
-            }
-            else noaaStatus = "NOAA: unreachable";
-            if (o != null && o.Count > 0) { outlook = o; }
+            if (w != null) MergeNoaa(w); else noaaStatus = "NOAA: unreachable";
+            if (o != null && o.Count > 0) outlook = o;
             Recompute();
         }
         // Pick the numbers for the time being displayed.
         void ChooseConditions(out double sfi, out double a, out double k, out string src)
         {
-            sfi = manSfi; a = manA; k = manK; src = "manual";
+            sfi = manSfi; a = manA; k = manK; src = "manual values";
             if (!auto) return;
-            bool have = noaa.Complete;
+            double ns = noaa.Sfi, na = noaa.A, nk = noaa.K; src = "NOAA now";
             if (T.Date > DateTime.UtcNow.Date && outlook != null)
-            {
-                foreach (OutlookRow r in outlook) if (r.Date.Date == T.Date)
-                    { sfi = r.Sfi; a = r.A; k = r.K; src = "NOAA 27-day outlook"; return; }
-            }
-            if (have) { sfi = noaa.Sfi; a = noaa.A; k = noaa.K; src = "NOAA now"; }
-            else src = "manual (no NOAA data yet)";
+                foreach (OutlookRow r in outlook) if (r.Date.Date == T.Date) { ns = r.Sfi; na = r.A; nk = r.K; src = "NOAA 27-day outlook"; break; }
+            int got = 0;
+            if (!double.IsNaN(ns)) { sfi = ns; got++; } if (!double.IsNaN(na)) { a = na; got++; } if (!double.IsNaN(nk)) { k = nk; got++; }
+            if (got == 0) src = "manual values (no NOAA data yet)"; else if (got < 3) src = src + " + manual fill";
+            if (T.Date < DateTime.UtcNow.Date && got > 0) src += " (past date: today's values)";
+            else if (src == "NOAA now" && T.Date > DateTime.UtcNow.Date.AddDays(27)) src += " (beyond 27-day outlook)";
         }
 
         // ================= compute =================
@@ -426,11 +453,11 @@ namespace N1TA.MofLof
 
         void UpdateInfo()
         {
-            string[] mn = { "SHORT PATH MOF", "LONG PATH MOF", "COMPOSITE MOF", "SHORT PATH LOF", "LONG PATH LOF", "COMPOSITE LOF", "3000 KM HOP MOF", "3000 KM HOP LOF" };
-            info.Text = string.Format(" {0}  {1:dd MMM yyyy HH:mm}Z {2}  SFI {3:0}  A {4:0}  K {5:0.#}  SSN {6:0}  QTH {7}",
-                mn[(int)mode], T, live ? "LIVE" : "FIXED", cond.Sfi, cond.A, cond.K, cond.Ssn, LatLon(qLat, qLon));
-            pNoaa.Text = auto ? noaaStatus + " | using " + dataSrc : "manual data";
-            pNoaa.ToolTipText = noaa.Note;
+            string[] mn = { "SHORT PATH MOF", "LONG PATH MOF", "COMPOSITE MOF", "SHORT PATH LOF", "LONG PATH LOF", "COMPOSITE LOF", "3000 KM (1864 MI) HOP MOF", "3000 KM (1864 MI) HOP LOF" };
+            info.Text = string.Format(" {0}  {1:dd MMM yyyy HH:mm}Z {2}  SFI {3:0}  A {4:0}  K {5:0.#}  SSN {6:0}  QTH {7} {8}",
+                mn[(int)mode], T, live ? "LIVE" : "FIXED", cond.Sfi, cond.A, cond.K, cond.Ssn, qGrid, LatLon(qLat, qLon));
+            pNoaa.Text = (auto ? noaaStatus + "  |  " : "NOAA automatic update is off  |  ") + "using " + dataSrc + "   (click to change)";
+            pNoaa.ToolTipText = "Click to change location, date and solar data. Help > NOAA diagnostics shows what NOAA returned.";
             bool mof = IsMof;
             string suffix = (mode == Mode.MofLong || mode == Mode.LofLong) ? "  (striped = long path)" : (mode == Mode.MofComp || mode == Mode.LofComp ? "  (striped = long path is better)" : "");
             if (mof) { legend.Labels = new string[] { "20M  MOF>=14.15", "15M  MOF>=21.2", "10M  MOF>=28.5", "white square = QTH" + suffix }; }
@@ -442,12 +469,14 @@ namespace N1TA.MofLof
 
         void OnMouse(object s, MouseEventArgs e)
         {
-            double la, lo; if (md == null || !Inverse(e.X + 0.5, e.Y + 0.5, out la, out lo)) { pRead.Text = ""; return; }
+            double la, lo; if (md == null || !Inverse(e.X + 0.5, e.Y + 0.5, out la, out lo)) { readout.Text = ""; return; }
             int ci = Math.Min(md.Nx - 1, Math.Max(0, (int)((lo + 180) / md.Step))), cj = Math.Min(md.Ny - 1, Math.Max(0, (int)((90 - la) / md.Step))); int x = cj * md.Nx + ci;
-            double d = Prop.Dist(Prop.Rad(qLat), Prop.Rad(qLon), Prop.Rad(la), Prop.Rad(lo)) * Prop.R;
+            double km = Prop.Dist(Prop.Rad(qLat), Prop.Rad(qLon), Prop.Rad(la), Prop.Rad(lo)) * Prop.R;
+            double lkm = 2 * Math.PI * Prop.R - km;
             double b = (Prop.Deg(Prop.Bearing(Prop.Rad(qLat), Prop.Rad(qLon), Prop.Rad(la), Prop.Rad(lo))) + 360) % 360;
-            pRead.Text = string.Format(CultureInfo.InvariantCulture, "{0}  {1:0} km {2:0} deg  MOF S{3:0.0} L{4:0.0}  LOF S{5} L{6}  3000km: MOF {7:0.0} LOF {8}",
-                LatLon(la, lo), d, b, md.MofS[x], md.MofL[x], Lf(md.LofS[x]), Lf(md.LofL[x]), md.Mof3[x], Lf(md.Lof3[x]));
+            readout.Text = string.Format(CultureInfo.InvariantCulture,
+                "{0} {1}  short {2:0} km / {3:0} mi  long {4:0} km / {5:0} mi  bearing {6:0} deg\r\nMOF short {7:0.0} long {8:0.0}   LOF short {9} long {10}   3000 km (1864 mi) hop: MOF {11:0.0} LOF {12}",
+                Grid.From(la, lo, 6), LatLon(la, lo), km, km * MiPerKm, lkm, lkm * MiPerKm, b, md.MofS[x], md.MofL[x], Lf(md.LofS[x]), Lf(md.LofL[x]), md.Mof3[x], Lf(md.Lof3[x]));
         }
         static string Lf(float v) { return v <= 1.0001f ? "<1.0" : v.ToString("0.0", CultureInfo.InvariantCulture); }
 
@@ -482,12 +511,12 @@ namespace N1TA.MofLof
                     double d; bool dv = double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out d);
                     switch (k)
                     {
-                        case "lat": if (dv) qLat = d; break; case "lon": if (dv) qLon = d; break;
+                        case "grid": { double la, lo; if (Grid.TryParse(v, out la, out lo)) { qGrid = Grid.Normalize(v); qLat = la; qLon = lo; } break; }
                         case "auto": auto = v == "1"; break; case "live": live = v == "1"; break;
                         case "sfi": if (dv) manSfi = d; break; case "a": if (dv) manA = d; break; case "k": if (dv) manK = d; break;
                         case "mode": if (dv && d >= 0 && d < 8) mode = (Mode)(int)d; break; case "proj": if (dv && d >= 0 && d < 3) proj = (Proj)(int)d; break;
                         case "step": if (dv && d >= 1) step = d; break;
-                        case "sun": ovSun = v == "1"; break; case "rad": ovRadials = v == "1"; break; case "grid": ovGrid = v == "1"; break;
+                        case "sun": ovSun = v == "1"; break; case "rad": ovRadials = v == "1"; break; case "gridlines": ovGrid = v == "1"; break;
                     }
                 }
             }
@@ -500,10 +529,10 @@ namespace N1TA.MofLof
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
                 CultureInfo ci = CultureInfo.InvariantCulture;
                 File.WriteAllLines(SettingsPath, new string[] {
-                    "lat=" + qLat.ToString(ci), "lon=" + qLon.ToString(ci), "auto=" + (auto ? 1 : 0), "live=" + (live ? 1 : 0),
+                    "grid=" + qGrid, "auto=" + (auto ? 1 : 0), "live=" + (live ? 1 : 0),
                     "sfi=" + manSfi.ToString(ci), "a=" + manA.ToString(ci), "k=" + manK.ToString(ci),
                     "mode=" + (int)mode, "proj=" + (int)proj, "step=" + step.ToString(ci),
-                    "sun=" + (ovSun ? 1 : 0), "rad=" + (ovRadials ? 1 : 0), "grid=" + (ovGrid ? 1 : 0) });
+                    "sun=" + (ovSun ? 1 : 0), "rad=" + (ovRadials ? 1 : 0), "gridlines=" + (ovGrid ? 1 : 0) });
             }
             catch { }
         }
@@ -511,7 +540,7 @@ namespace N1TA.MofLof
 
     public static class HelpText
     {
-        public static string Version = "1.0.0";
+        public static string Version = "1.1.0";
         public static string About =
             "N1TA MOF/LOF " + Version + "\r\n\r\n" +
             "A from-scratch rewrite of the idea behind K1TTT's MOF/LOF\r\n" +
@@ -524,8 +553,8 @@ namespace N1TA.MofLof
             "has not read this program.\r\n\r\n" +
             "github.com/mfdechristopher/N1TA-MOF-LOF";
         public static string Notes =
-            "Keys: 1-8 display, Enter/Space next hour, Backspace previous,\r\n" +
-            "R/X/G projection, S sun lines, P radials, A animate, L live, F5 refresh NOAA.\r\n\r\n" +
+            "Distances are shown in kilometers and miles everywhere (1 km = 0.6214 mi).\r\n\r\nKeys: 1-8 display, Enter/Space next hour, Backspace previous,\r\n" +
+            "R/X/G projection, S sun lines, P radials, A animate, L live, F5 refresh NOAA, Ctrl+S location/date/solar data.\r\n\r\n" +
             "Map colours: MOF - blue 20M, green 15M, red 10M.\r\n" +
             "             LOF - blue 40M, green 80M, red 160M.\r\n" +
             "Striped cells are the long path.\r\n\r\n" +
@@ -536,6 +565,6 @@ namespace N1TA.MofLof
             "storm corrections: lower MOF at mid/high geomagnetic latitudes when K is\r\n" +
             "above 3, and extra D-layer/auroral absorption (higher LOF) when K is high.\r\n" +
             "These are heuristics, not published models.\r\n\r\n" +
-            "Future dates in automatic mode use NOAA's 27-day outlook when available.";
+            "Future dates in automatic mode use NOAA's 27-day outlook when available (up to 27 days ahead).\r\nBeyond that, or for past dates, choose Manual and enter the SFI/A/K you want.\r\nA is the mean of the last 24 hours of NOAA 3-hourly values.";
     }
 }

@@ -28,17 +28,32 @@ namespace N1TA.MofLof
             Check("SFI 60 -> SSN 0", Prop.SsnFromFlux(60) == 0);
             Check("Ap 15 -> K 3", Near(Prop.KFromA(15), 3, 0.01));
 
-            Check("flux parse", Near(Noaa.ParseFlux("{\"Flux\":\"148\",\"TimeStamp\":\"2026-10-14 20:00:00\"}"), 148, 0.001));
-            double kp, a;
-            bool ok = Noaa.ParseKp("[[\"time_tag\",\"Kp\",\"a_running\",\"station_count\"],[\"2026-10-15 00:00:00.000\",\"2.33\",\"9\",\"8\"],[\"2026-10-15 03:00:00.000\",\"3.00\",\"15\",\"8\"]]", out kp, out a);
-            Check("Kp parse (array form)", ok && Near(kp, 3.0, 0.001) && Near(a, 15, 0.001));
-            ok = Noaa.ParseKp("[{\"time_tag\":\"2026-10-15T00:00:00\",\"Kp\":2.67,\"a_running\":12,\"station_count\":8}]", out kp, out a);
-            Check("Kp parse (object form)", ok && Near(kp, 2.67, 0.001) && Near(a, 12, 0.001));
-            string dgd = "# Date  A K...\n2026 10 13    6   1 1 2 1 1 1 2 1     4   0 0 1 1 1 1 1 0     7   2 1 2 2 1 1 2 2\n2026 10 14    9   2 2 2 3 2 1 2 2     8   1 1 2 3 2 2 1 1    11   3 2 2 3 3 2 2 -1\n";
-            ok = Noaa.ParseDgd(dgd, out a, out kp);
-            Check("DGD parse", ok && Near(a, 11, 0.001) && Near(kp, 2, 0.001));
+            // ---- NOAA parsers ----
+            Check("flux: object, quoted", Near(Noaa.ParseFlux("{\"Flux\":\"148\",\"TimeStamp\":\"2026-10-14 20:00:00\"}"), 148, 0.001));
+            Check("flux: object, numeric, last wins", Near(Noaa.ParseFlux("[{\"flux\":140},{\"flux\":152.5}]"), 152.5, 0.001));
+            Check("flux: array rows", Near(Noaa.ParseFlux("[[\"time_tag\",\"flux\"],[\"2026-10-01\",\"131\"],[\"2026-10-02\",\"135\"]]"), 135, 0.001));
+            Check("flux: junk -> NaN, no throw", double.IsNaN(Noaa.ParseFlux("<html>503</html>")) && double.IsNaN(Noaa.ParseFlux(null)));
+
+            string kpObj = "[{\"time_tag\":\"2026-10-15T00:00:00\",\"Kp\":2.33,\"a_running\":9,\"station_count\":8},{\"time_tag\":\"2026-10-15T03:00:00\",\"Kp\":3.0,\"a_running\":null,\"station_count\":8},{\"time_tag\":\"2026-10-15T06:00:00\",\"Kp\":1.67,\"a_running\":6,\"station_count\":8}]";
+            List<KpRow> kr = Noaa.ParseKp(kpObj);
+            Check("Kp objects (new NOAA layout, null tolerated): 3 rows, last Kp 1.67", kr.Count == 3 && Near(Noaa.LatestKp(kr), 1.67, 0.001));
+            Check("A = mean of last 24 h, null filled from Kp (9 + 15 + 6)/3 = 10", Near(Noaa.DailyA(kr), 10, 0.05));
+            string kpArr = "[[\"time_tag\",\"Kp\",\"a_running\",\"station_count\"],[\"2026-10-15 00:00:00.000\",\"2.33\",\"9\",\"8\"],[\"2026-10-15 03:00:00.000\",\"3.00\",\"15\",\"8\"]]";
+            kr = Noaa.ParseKp(kpArr);
+            Check("Kp arrays (old layout)", kr.Count == 2 && Near(Noaa.LatestKp(kr), 3.0, 0.001) && Near(Noaa.DailyA(kr), 12, 0.05));
+            Check("Kp: junk -> empty, no throw", Noaa.ParseKp("garbage").Count == 0 && Noaa.ParseKp(null).Count == 0 && double.IsNaN(Noaa.DailyA(new List<KpRow>())));
+            Check("Kp 3 -> ap 15, Kp 5 -> ap 48", Near(Noaa.ApFromKp(3), 15, 0.01) && Near(Noaa.ApFromKp(5), 48, 0.01));
             List<OutlookRow> o = Noaa.ParseOutlook("# comment\n2026 Oct 15     135          8          3\n2026 Oct 16     138         10          3\n");
             Check("27-day outlook parse", o.Count == 2 && o[1].Date.Day == 16 && Near(o[1].Sfi, 138, 0.001) && Near(o[1].A, 10, 0.001));
+            Check("outlook: junk -> empty", Noaa.ParseOutlook("nothing here").Count == 0);
+
+            // ---- grid squares ----
+            double gla, glo;
+            Check("grid FN32pb -> about 42.06N 72.71W", Grid.TryParse("FN32pb", out gla, out glo) && Near(gla, 42.06, 0.02) && Near(glo, -72.71, 0.02));
+            Check("grid FN32 centre", Grid.TryParse("fn32", out gla, out glo) && Near(gla, 42.5, 0.001) && Near(glo, -73.0, 0.001));
+            Check("grid round trip", Grid.From(42.06, -72.71, 6) == "FN32pb" && Grid.From(51.5, -0.12, 6) == "IO91wm");
+            Check("grid rejects junk", !Grid.TryParse("ZZ99", out gla, out glo) && !Grid.TryParse("FN3", out gla, out glo) && !Grid.TryParse("", out gla, out glo));
+            Check("3000 km is 1864 mi", Near(3000 * 0.621371, 1864, 0.5));
 
             Cond q = new Cond(); q.Month = 6; q.Day = 21; q.Hour = 17; q.Sfi = 130; q.A = 5; q.K = 1; q.Derive();
             double day = Prop.PathMof(Prop.Rad(42), Prop.Rad(-72), Prop.Rad(51), Prop.Rad(0), false, q);

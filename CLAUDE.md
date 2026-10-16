@@ -10,13 +10,17 @@ N1TA MOF/LOF: a deliberately plain Windows desktop program that draws HF MOF and
 2. **No third-party dependencies.** One `.exe`, .NET Framework 4.x only (WinForms, GDI+). No NuGet, no external DLLs, no installer.
 3. **No K1TTT code.** Behaviour and look are fair game; source is not. Credit stays in README/THIRD_PARTY.md/About.
 4. **Never claim more than is verified.** MOF is verified against the Navy sample (see below). LOF and the A/K storm factors are heuristics and must be described as such in docs and UI text.
-5. **Offline must work.** Every NOAA failure falls back to manual values. Never throw to the user over a network error.
+5. **Offline must work.** Every NOAA failure falls back to manual values. Never throw to the user over a network or parse error.
+6. **Parsers never throw.** NOAA formats change. Parse with tolerant regexes, return NaN/empty on surprises, log to `Noaa.Log` (Help > NOAA diagnostics), and add the new sample to `SelfTest.cs`. Do not assume column positions in any NOAA text file; v1.0.0 did and shipped broken.
+7. **Never guess the user's location.** The grid square is asked at every start (pre-filled from `settings.ini`). No hard-coded default location.
+8. **Every distance shown to the user shows both km and miles.** Status readout, mode names, help text, README.
 
 ## Layout
 - `src/Engine.cs`: all propagation maths. Pure functions, no UI, no I/O.
-- `src/Noaa.cs`: HTTP fetch + regex parsers (tolerant of both array and object JSON shapes).
-- `src/MainForm.cs`: window, menu, per-pixel inverse-projection renderer, settings (`%APPDATA%\N1TA-MOFLOF\settings.ini`).
-- `src/StartDialog.cs`: the Start box, Maidenhead conversion, date-year inference.
+- `src/Noaa.cs`: HTTP fetch, tolerant parsers, diagnostics log. Feeds used: 10cm flux summary (+2 fallbacks), planetary Kp feed (A = mean of last 8 3-hourly a values), 27-day outlook.
+- `src/Grid.cs`: Maidenhead conversion.
+- `src/MainForm.cs`: window, menu, per-pixel inverse-projection renderer, settings (`%APPDATA%\N1TA-MOFLOF\settings.ini`: grid, auto, live, manual sfi/a/k, mode, proj, step, overlays).
+- `src/StartDialog.cs`: the single input screen (grid, live/fixed date-time, automatic/manual solar data, fetch button). Shown at startup and via Ctrl+S.
 - `src/SelfTest.cs`: `--selftest` regression checks.
 - `res/coast.txt`: Natural Earth 110m coastline. One polyline per line, space-separated `lon10,lat10` integer pairs (degrees x 10). Embedded as resource named `coast.txt`.
 - `build.sh`: the only build step.
@@ -37,7 +41,8 @@ The compiler is Mono's `mcs` (C# up to about 6/7 features). Avoid newer syntax (
 - Long path: same great circle, other way round (bearing + 180°, arc = 2π - d). Control points for paths over ~4000 km are 1/(2*1.59*arc) from each end (two points); hop angle for M-factor is arc/2 (the Navy BASIC), not the constant used in some C ports.
 - Rendering is per-pixel inverse projection → cell lookup, so every projection shares one code path. Add projections by implementing `Forward` and `Inverse` only.
 - `Legend.Labels` (not `Text`) holds legend strings; `Text` would hide `Control.Text`.
-- NOAA endpoints and formats are in `Noaa.cs`. The author's build environment could not reach NOAA, so live responses have only been checked against sample text. If a parser breaks, fix the regex and add the new sample to `SelfTest.cs`.
+- NOAA endpoints are in `Noaa.cs`. The build environment cannot reach NOAA, so live responses have only been checked against sample layouts (the Kp feed switched from arrays to objects with two-decimal Kp in Nov 2022; both are handled). Ask users for the text from Help > NOAA diagnostics.
+- Mono's DateTimePicker ignores typed digits, so date entry cannot be driven by xdotool in the Linux test rig.
 - Windows quirks not covered by Mono testing: DPI scaling (no manifest, so Windows bitmap-scales), SmartScreen on the unsigned exe.
 
 ## Release process
