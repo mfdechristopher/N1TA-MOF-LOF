@@ -1,0 +1,18 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Claude PR Review
+        uses: anthropic/claude-code-action@v1
+        with:
+          auth_token: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: "Please review this pull request diff for bugs, logical flaws, and security risks."
