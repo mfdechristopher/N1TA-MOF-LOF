@@ -14,11 +14,16 @@ N1TA MOF/LOF: a deliberately plain Windows desktop program that draws HF MOF and
 6. **Parsers never throw.** NOAA formats change. Parse with tolerant regexes, return NaN/empty on surprises, log to `Noaa.Log` (Help > NOAA diagnostics), and add the new sample to `SelfTest.cs`. Do not assume column positions in any NOAA text file; v1.0.0 did and shipped broken.
 7. **Never guess the user's location.** The grid square is asked at every start (pre-filled from `settings.ini`). No hard-coded default location.
 8. **Every distance shown to the user shows both km and miles.** Status readout, mode names, help text, README.
+9. **The banner is the one place the UI is allowed to shout.** Flat colours only (green open, yellow marginal, grey closed), no gradients or animation. It must stay readable from across a room.
+10. **UDP is receive-only and tolerant.** `Udp.cs` never throws on bad packets, never sends anything, and uses regexes rather than an XML parser (DXLog.net's own documented sample has mismatched tags). N1MM/DXLog frequencies are integers in units of **10 Hz** (704000 = 7.04 MHz). `<spot>` and `<Rotator>` packets also contain "frequency" fields and must never be used as the radio frequency.
 
 ## Layout
 - `src/Engine.cs`: all propagation maths. Pure functions, no UI, no I/O.
 - `src/Noaa.cs`: HTTP fetch, tolerant parsers, diagnostics log. Feeds used: 10cm flux summary (+2 fallbacks), planetary Kp feed (A = mean of last 8 3-hourly a values), 27-day outlook.
 - `src/Grid.cs`: Maidenhead conversion.
+- `src/Bands.cs`: Best Band logic. Band is Open / Marginal (within 15% of MOF or LOF) / Closed at its operating frequency, best of short and long path; best = highest Open band; world summary needs a third of the 18 regions (min 2) to be Open. Also the extended 160-10 m table (incl. 60/30/17/12 m) and region list. MINIMUF clips at 32 MHz, treated as "32 or more".
+- `src/BestBandView.cs`: the banner control.
+- `src/Udp.cs`: feed parsers (N1MM-style XML, WSJT-X binary, ADIF fallback) and `UdpTracker` (socket thread, SO2R focus, station filter, event fallback, diagnostics log).
 - `src/MainForm.cs`: window, menu, per-pixel inverse-projection renderer, settings (`%APPDATA%\N1TA-MOFLOF\settings.ini`: grid, auto, live, manual sfi/a/k, mode, proj, step, overlays).
 - `src/StartDialog.cs`: the single input screen (grid, live/fixed date-time, automatic/manual solar data, fetch button). Shown at startup and via Ctrl+S.
 - `src/SelfTest.cs`: `--selftest` regression checks.

@@ -17,6 +17,8 @@ namespace N1TA.MofLof
         // results
         public string GridText; public double Lat, Lon, Sfi, A, K; public DateTime When; public bool Auto, Live;
         public SpaceWx FetchedCurrent; public List<OutlookRow> FetchedOutlook;
+        public bool UdpOn; public int UdpPort, UdpRadio; public string UdpStation = "";
+        CheckBox cUdp; NumericUpDown nPort; ComboBox cbRadio; TextBox tStation; Label lUdp; Func<string> udpStatus; System.Windows.Forms.Timer tm;
 
         Label Lbl(string t, int x, int y, int w) { Label l = new Label(); l.Text = t; l.Left = x; l.Top = y; l.Width = w; l.AutoSize = (w == 0); Controls.Add(l); return l; }
         TextBox Box(int x, int y, int w, string v) { TextBox t = new TextBox(); t.Left = x; t.Top = y; t.Width = w; t.Text = v; Controls.Add(t); return t; }
@@ -25,11 +27,12 @@ namespace N1TA.MofLof
         static string F(double v) { return double.IsNaN(v) ? "" : v.ToString("0.##", CI); }
         static bool Good(double v) { return !double.IsNaN(v); }
 
-        public StartDialog(string grid, DateTime t, bool live, bool auto, double sfi, double a, double k, SpaceWx noaa, List<OutlookRow> outl, bool startup)
+        public StartDialog(string grid, DateTime t, bool live, bool auto, double sfi, double a, double k, SpaceWx noaa, List<OutlookRow> outl, bool startup,
+            bool udpOn, int udpPort, int udpRadio, string udpStation, Func<string> udpStat)
         {
             Text = startup ? "N1TA MOF/LOF - Start" : "Location, date and solar data";
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false; ShowInTaskbar = false;
-            StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(500, 452);
+            StartPosition = FormStartPosition.CenterScreen; ClientSize = new Size(500, 600); udpStatus = udpStat;
             cur = noaa; outlook = outl;
 
             Lbl("Your location", 14, 12, 200).Font = new Font(Font, FontStyle.Bold);
@@ -57,8 +60,19 @@ namespace N1TA.MofLof
             Btn("Fetch from NOAA now", 30, 308, 150, delegate { FetchNow(); });
             lSolarNote = Lbl("", 30, 340, 460); lSolarNote.Height = 56;
 
-            Button ok = Btn("OK", 314, 410, 80, delegate { if (Collect()) { DialogResult = DialogResult.OK; Close(); } });
-            Button cancel = Btn(startup ? "Quit / Skip" : "Cancel", 404, 410, 80, delegate { DialogResult = DialogResult.Cancel; Close(); });
+            Lbl("Logging software (UDP broadcast)", 14, 404, 300).Font = new Font(Font, FontStyle.Bold);
+            cUdp = new CheckBox(); cUdp.Text = "Follow the radio's band from my logging program (shows only that band)"; cUdp.Left = 30; cUdp.Top = 426; cUdp.Width = 460; cUdp.Checked = udpOn; Controls.Add(cUdp);
+            Lbl("UDP port", 30, 458, 55); nPort = new NumericUpDown(); nPort.Left = 88; nPort.Top = 455; nPort.Width = 66; nPort.Minimum = 1; nPort.Maximum = 65535; nPort.Value = Math.Max(1, Math.Min(65535, udpPort)); Controls.Add(nPort);
+            Lbl("Radio", 168, 458, 40); cbRadio = new ComboBox(); cbRadio.DropDownStyle = ComboBoxStyle.DropDownList; cbRadio.Left = 208; cbRadio.Top = 455; cbRadio.Width = 120;
+            cbRadio.Items.AddRange(new object[] { "Focused radio", "Radio 1", "Radio 2", "Radio 3", "Radio 4" }); cbRadio.SelectedIndex = Math.Max(0, Math.Min(4, udpRadio)); Controls.Add(cbRadio);
+            Lbl("Station", 340, 458, 44); tStation = Box(386, 455, 96, udpStation ?? ""); 
+            Lbl("N1MM+ / DXLog.net: enable the Radio info broadcast, port 12060. WSJT-X: port 2237. Station: only if several stations share a network.", 30, 484, 460).Height = 32;
+            lUdp = Lbl("", 30, 518, 460); lUdp.Height = 34;
+            tm = new System.Windows.Forms.Timer(); tm.Interval = 700; tm.Tick += delegate { if (udpStatus != null) lUdp.Text = cUdp.Checked ? udpStatus() : "Radio following is off."; }; tm.Start();
+            FormClosed += delegate { tm.Stop(); tm.Dispose(); };
+            if (udpStatus != null) lUdp.Text = cUdp.Checked ? udpStatus() : "Radio following is off.";
+            Button ok = Btn("OK", 314, 562, 80, delegate { if (Collect()) { DialogResult = DialogResult.OK; Close(); } });
+            Button cancel = Btn(startup ? "Quit / Skip" : "Cancel", 404, 562, 80, delegate { DialogResult = DialogResult.Cancel; Close(); });
             AcceptButton = ok; CancelButton = cancel;
 
             EventHandler upd = delegate { UpdateState(); };
@@ -133,6 +147,7 @@ namespace N1TA.MofLof
                 if (!Grid.TryParse(tGrid.Text, out Lat, out Lon)) throw new Exception("Please enter a valid Maidenhead grid square, such as FN32 or FN32pb.");
                 GridText = Grid.Normalize(tGrid.Text);
                 Live = rLive.Checked; Auto = rAuto.Checked;
+                UdpOn = cUdp.Checked; UdpPort = (int)nPort.Value; UdpRadio = cbRadio.SelectedIndex; UdpStation = tStation.Text.Trim();
                 When = DateTime.SpecifyKind(dtp.Value.Date.AddHours((double)nHr.Value).AddMinutes((double)nMin.Value), DateTimeKind.Utc);
                 if (Live) When = DateTime.UtcNow;
                 double v;

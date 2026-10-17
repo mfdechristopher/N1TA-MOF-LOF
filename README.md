@@ -2,19 +2,19 @@
 
 **A bare-bones HF propagation map for Windows. One `.exe`, no installer, no account, no cloud, no dashboard, no "insights."**
 
-It paints the world in three colours showing where your signal can go (MOF, the *maximum* observed frequency) and where the D-layer is going to eat it (LOF, the *lowest* observed frequency), then pulls today's solar numbers from NOAA so you don't have to.
+It paints the world in three colours showing where your signal can go (MOF, the *maximum* observed frequency) and where the D-layer is going to eat it (LOF, the *lowest* observed frequency), pulls today's solar numbers from NOAA so you don't have to, and puts a very large, very flat **BEST BAND** box at the top for the moment you need to decide whether to stay or QSY. It can also listen to your logging program and show only the band your radio is actually on.
 
 It is a from-scratch rewrite of the idea behind [K1TTT's MOF/LOF program](https://wiki.k1ttt.net), which has been quietly useful since the DOS era. Credit for the concept and the look belongs to Dave, K1TTT. No K1TTT code was used. Go thank him.
 
-![Short-path MOF map](docs/screenshot-mof.png)
+![Best band banner and single-band map, following the radio](docs/screenshot-follow-radio.png)
 
-*Short-path MOF from FN32. Blue = 20 m open, green = 15 m, red = 10 m, black = go outside. The white line is the day/night terminator. The white square is you.*
+*The radio is on 20 m, so the map shows only 20 m: green is open, yellow marginal, black closed, stripes are long path. The banner says the radio is on the best band right now. The six cells on the right show every contest band at a glance.*
 
 ---
 
 ## Get it
 
-1. Grab `N1TA_MOFLOF-v1.1.0.zip` from the [Releases](../../releases) page.
+1. Grab `N1TA_MOFLOF-v1.2.0.zip` from the [Releases](../../releases) page.
 2. Unzip. Double-click `N1TA_MOFLOF.exe`.
 3. Windows SmartScreen will say it doesn't recognise the app. It is correct: I did not pay for a code-signing certificate to draw coastlines. Click *More info → Run anyway*, or build it yourself (below) and trust your own compiler.
 
@@ -27,6 +27,8 @@ Needs .NET Framework 4.x, which is already on Windows 10 and 11. Windows 7/8 use
 3. **Pick your solar data.** *Automatic* fetches SFI, A and K from NOAA. *Manual* lets you type your own. Either way the numbers you'll actually get are shown in the boxes.
 4. Press OK. Look at the map. **Enter** jumps an hour ahead, **Backspace** back, **A** animates the day. **4** flips from MOF to LOF; **3** and **6** are the composite short/long path views.
 5. Hover anywhere on the map. Two lines at the bottom give the grid square under the cursor, the distance in **kilometers and miles** (short path and long path), the bearing, MOF and LOF for both paths, and the 3000 km (1864 mi) single-hop numbers.
+
+6. Glance at the **BEST BAND** box above the map. That's the whole point of this program during a contest. Details below.
 
 Change anything later with **Calculations → Location, date and solar data** (Ctrl+S), or just click the status bar.
 
@@ -54,6 +56,40 @@ Pick the date in the Start screen. The map is drawn for that exact UTC date and 
 
 Open **Help → NOAA diagnostics**. It lists every request, what came back, and what the program made of it, and it's built for pasting into a [GitHub issue](../../issues). The program never stops working over this: it just uses your manual numbers.
 
+## Best Band
+
+The big box above the map answers one question: *which band should I be on right now?*
+
+* **Green** block: the band is open. **Yellow**: marginal. **Grey**: nothing usable.
+* The six cells on the right show 160, 80, 40, 20, 15 and 10 m at a glance. The outlined one is the best (or, when following your radio, the band you're on). Under each is how many of 18 distant regions it reaches.
+* **How "best" is decided.** Each band is judged at its usual operating frequency (1.85, 3.6, 7.1, 14.15, 21.2, 28.5 MHz) on both the short and long path. It is **open** when that frequency sits comfortably between the LOF and the MOF, **marginal** when it's within 15% of either edge, and **closed** outside them. The best band is the **highest** band that is open to at least a third of 18 representative regions more than 1500 km (932 mi) away: the contest rule of thumb that higher is quieter and less absorbed. The box names the regions ("EU-W EU-E AF-S ...") so you can see who you'd be working.
+* **For one specific target**, click the map (or press **T** and type a grid square). The box then gives the best band to *that* place, with distance in km and miles and which path to use. Right-click or **Esc** returns to the world summary.
+
+This is a prediction of the median ionosphere, not a guarantee. If your ears disagree with the box, believe your ears.
+
+## Following your radio (UDP)
+
+Tick the UDP option on the Start screen and the program listens for your logging software's radio-frequency broadcast. It then shows **only the band your radio is on**, and the banner tells you whether a better band exists ("Best now: 15 M (9/18). Consider moving up."). QSY and the map follows within a second or two. Press **B** to switch single-band view on and off, or pick a band by hand from **Display → Single band view** (this works without any logger).
+
+| Logger | What to enable | Port |
+|---|---|---|
+| **N1MM Logger+** | The Configurer window → **Broadcast Data** tab: tick **Radio**, destination `127.0.0.1:12060` | 12060 |
+| **DXLog.net** | Options → Broadcast: tick **Radio information**; Options → Configure network: radio information broadcast address `127.0.0.1:12060` | 12060 (13063 if you set it up for Waterfall Bandmap) |
+| **WSJT-X** | Settings → Reporting → UDP Server `127.0.0.1`, port 2237 | 2237 |
+| Anything that sends N1MM-style `<RadioInfo>`, e.g. MacLoggerDX, DXLab Commander | their "N1MM UDP" option | 12060 |
+| Anything that sends ADIF text over UDP | fallback: frequency or band of each logged QSO | any |
+
+Notes:
+* **SO2R / SO2V:** choose *Focused radio* (default) to follow whichever radio has the keyboard focus, or lock to Radio 1, 2, 3 or 4. In split, it follows your **transmit** frequency.
+* **Several stations on one network** (multi-op): put your station name in the Station box so other stations' packets are ignored.
+* **Port already in use?** Several programs often want 12060. Add a second destination in your logger (for example `127.0.0.1:12061`) and set that port here.
+* **Windows Firewall** may ask about network access the first time. Same-PC traffic works regardless; allow it on *private* networks if your logger is on another computer.
+* The band is taken from the radio's frequency, so 12 m, 17 m, 30 m and 60 m work too. 6 m and up is outside this HF model and the program says so instead of pretending.
+* Nothing is sent to your logger. It is receive-only.
+* If nothing is recognised, **Help → Radio feed diagnostics** lists every packet received and what was made of it. Paste that into an [issue](../../issues) and I'll add your logger.
+
+![Best band for a clicked target](docs/screenshot-target.png)
+
 ## Keys
 
 | Key | What it does |
@@ -68,6 +104,9 @@ Open **Help → NOAA diagnostics**. It lists every request, what came back, and 
 | `R` `X` `G` | Rectangular / north polar / polar centred on your QTH |
 | `S` | Sunrise (solid) and sunset (dashed) lines |
 | `P` | Great-circle radials from your QTH, every 30° |
+| `B` | Single-band view on/off (follows your radio if UDP is on) |
+| `T` | Set a target grid square for the Best Band box (or click the map) |
+| `Esc` / right-click | Clear the target |
 | `F5` | Re-fetch NOAA data now |
 | `Ctrl+S` | Location, date and solar data |
 
@@ -108,6 +147,7 @@ Higher bands imply the lower ones. Red on a MOF map means 20 and 15 are open too
 * MINIMUF is an F-region model. It knows nothing about sporadic E, grey-line enhancement, or that one guy with the 4-element 160 m array.
 * Daily flux is noisy. NOAA's "now" value drives the map; a 3-to-30-day average is a steadier planning input, which is what the Start box is for.
 * Tested: the engine against the Navy's published sample; the NOAA parsers against samples of the documented feed layouts (including garbage input, which must not throw); the Maidenhead conversion; and the full GUI under Mono on a virtual display (first-run prompt, saved grid, manual entry, all eight map modes, three projections). **Not yet tested:** on a real Windows machine, and against NOAA's live servers (the build environment couldn't reach them). The first public release shipped with a NOAA parser that guessed one file layout wrong; 1.1.0 dropped that file and made every parser tolerant. If NOAA still won't load for you, **Help → NOAA diagnostics** has the evidence.
+* The UDP feeds were checked against the sample packets in N1MM+'s and DXLog.net's own documentation, a WSJT-X status packet built from its published layout, and a real UDP socket on loopback. **Not yet tested against a live N1MM+, DXLog.net or WSJT-X.** If your logger is unrecognised, Help > Radio feed diagnostics shows why.
 * The date picker accepts typing on Windows; the Linux test rig could not drive it, so date entry was checked by reading, not by clicking.
 
 ## Build it yourself
@@ -127,6 +167,9 @@ Layout:
 src/Engine.cs       propagation maths (MINIMUF 3.5, LOF, storm tweaks, sun position)
 src/Noaa.cs         SWPC fetch + tolerant parsers + diagnostics log
 src/Grid.cs         Maidenhead <-> lat/lon
+src/Bands.cs        Best Band logic: open/marginal/closed, regions, band tables
+src/BestBandView.cs the big banner
+src/Udp.cs          logger UDP feed parsers + listener
 src/MainForm.cs     the window, the map renderer, settings
 src/StartDialog.cs  the one input screen: grid, date/time, solar data
 src/SelfTest.cs     --selftest
@@ -134,7 +177,7 @@ res/coast.txt       Natural Earth 110m coastline, reduced
 build.sh            one-line build
 ```
 
-Pushing a tag like `v1.1.0` makes GitHub Actions build, self-test, zip and attach the release automatically.
+Pushing a tag like `v1.2.0` makes GitHub Actions build, self-test, zip and attach the release automatically.
 
 ## Support
 

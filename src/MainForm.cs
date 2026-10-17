@@ -15,6 +15,7 @@ namespace N1TA.MofLof
 {
     public enum Mode { MofShort, MofLong, MofComp, LofShort, LofLong, LofComp, Mof3k, Lof3k }
     public enum Proj { Rect, North, Centered }
+    public enum BandView { Off, Follow, Manual }
 
     public class MapData
     {
@@ -70,6 +71,11 @@ namespace N1TA.MofLof
         bool ovSun = true, ovRadials = false, ovGrid = true;
         double step = 4.0;
         Cond cond = new Cond(); string dataSrc = "";
+        bool hasTarget = false; double tLat, tLon; string tGrid = "";
+        BestBandView best = new BestBandView();
+        UdpTracker udp = new UdpTracker(); bool udpOn = false; int udpPort = 12060, udpRadio = 0; string udpStation = "";
+        BandView bandView = BandView.Off; int manualBand = 5; int seenVer = -1; bool seenHas = false;
+        System.Windows.Forms.Timer udpPoll = new System.Windows.Forms.Timer(); MenuItem[] miBandView;
         MapData md; List<double[]> coast = new List<double[]>();
 
         // ---- ui ----
@@ -91,24 +97,31 @@ namespace N1TA.MofLof
             info.Dock = DockStyle.Top; info.Height = 20; info.Font = new Font("Courier New", 9f); info.TextAlign = ContentAlignment.MiddleLeft;
             readout.Dock = DockStyle.Bottom; readout.Height = 36; readout.Font = new Font("Courier New", 9f); readout.Padding = new Padding(4, 2, 0, 0);
             sb.ShowPanels = true; pNoaa.AutoSize = StatusBarPanelAutoSize.Spring; sb.Panels.Add(pNoaa);
-            Controls.Add(map); Controls.Add(legend); Controls.Add(readout); Controls.Add(info); Controls.Add(sb);
+            Controls.Add(map); Controls.Add(legend); Controls.Add(readout); Controls.Add(best); Controls.Add(info); Controls.Add(sb);
             map.BringToFront();
             BuildMenu();
             map.MouseMove += OnMouse; map.MouseLeave += delegate { readout.Text = ""; };
             map.MouseDown += delegate { map.Focus(); };
+            map.MouseClick += delegate (object so, MouseEventArgs me)
+            {
+                if (me.Button == MouseButtons.Right) { ClearTarget(); return; }
+                double la, lo; if (md != null && Inverse(me.X + 0.5, me.Y + 0.5, out la, out lo)) SetTarget(la, lo);
+            };
             map.SizeChanged += delegate { rsz.Stop(); rsz.Start(); };
             sb.PanelClick += delegate { ShowStart(false); };
             rsz.Interval = 120; rsz.Tick += delegate { rsz.Stop(); Redraw(); };
             tick.Interval = 15000; tick.Tick += OnTick; tick.Start();
             anim.Interval = 700; anim.Tick += delegate { Advance(1); };
+            udpPoll.Interval = 1000; udpPoll.Tick += delegate { PollUdp(); }; udpPoll.Start();
             Shown += delegate { BeginInvoke(new MethodInvoker(Startup)); };
-            FormClosing += delegate { SaveSettings(); };
+            FormClosing += delegate { SaveSettings(); udp.Stop(); };
         }
 
         // Ask for the grid square every time the program opens (pre-filled with last time's answer).
         void Startup()
         {
             if (live) T = DateTime.UtcNow;
+            if (udpOn) ApplyUdp(false);
             ShowStart(true);
         }
 
@@ -123,6 +136,8 @@ namespace N1TA.MofLof
 
             MenuItem calc = new MenuItem("&Calculations");
             calc.MenuItems.Add(new MenuItem("&Location, date and solar data...", delegate { ShowStart(false); }, Shortcut.CtrlS));
+            calc.MenuItems.Add(new MenuItem("&Target grid square...\tT", delegate { PromptTarget(); }));
+            calc.MenuItems.Add(new MenuItem("Clear target\tEsc", delegate { ClearTarget(); }));
             calc.MenuItems.Add(new MenuItem("-"));
             calc.MenuItems.Add(new MenuItem("&Next hour\tEnter", delegate { Advance(1); }));
             calc.MenuItems.Add(new MenuItem("&Previous hour\tBackspace", delegate { Advance(-1); }));
@@ -155,10 +170,22 @@ namespace N1TA.MofLof
                 double s = steps[i]; miRes[i] = new MenuItem(string.Format("{0} degree cells", s), delegate { step = s; Recompute(); SyncMenu(); }); miRes[i].RadioCheck = true; res.MenuItems.Add(miRes[i]);
             }
             disp.MenuItems.Add(res);
+            disp.MenuItems.Add(new MenuItem("-"));
+            MenuItem bv = new MenuItem("Single &band view");
+            miBandView = new MenuItem[2 + Bands.ExtName.Length];
+            miBandView[0] = new MenuItem("Off (normal maps)", delegate { SetBandView(BandView.Off, 0); });
+            miBandView[1] = new MenuItem("Follow the radio (UDP)	B", delegate { SetBandView(BandView.Follow, 0); });
+            for (int i = 0; i < Bands.ExtName.Length; i++)
+            {
+                int k = i; miBandView[2 + i] = new MenuItem(Bands.ExtName[i] + " m   (" + Bands.ExtCenter[i].ToString("0.0#", CultureInfo.InvariantCulture) + " MHz)", delegate { SetBandView(BandView.Manual, k); });
+            }
+            for (int i = 0; i < miBandView.Length; i++) { miBandView[i].RadioCheck = true; bv.MenuItems.Add(miBandView[i]); }
+            disp.MenuItems.Add(bv);
 
             MenuItem help = new MenuItem("&Help");
             help.MenuItems.Add(new MenuItem("&Notes", delegate { MessageBox.Show(this, HelpText.Notes, "N1TA MOF/LOF - Notes"); }));
             help.MenuItems.Add(new MenuItem("NOAA &diagnostics", delegate { ShowDiag(); }));
+            help.MenuItems.Add(new MenuItem("&Radio feed diagnostics", delegate { ShowRadioDiag(); }));
             help.MenuItems.Add(new MenuItem("&About", delegate { MessageBox.Show(this, HelpText.About, "About N1TA MOF/LOF"); }));
             m.MenuItems.AddRange(new MenuItem[] { file, calc, disp, help });
             Menu = m; SyncMenu();
@@ -170,6 +197,8 @@ namespace N1TA.MofLof
             double[] steps = { 2, 4, 6, 9 }; for (int i = 0; i < miRes.Length; i++) miRes[i].Checked = steps[i] == step;
             miSun.Checked = ovSun; miRad.Checked = ovRadials; miGrid.Checked = ovGrid;
             miLive.Checked = live; miAnim.Checked = anim.Enabled;
+            for (int i = 0; i < miBandView.Length; i++)
+                miBandView[i].Checked = (i == 0 && bandView == BandView.Off) || (i == 1 && bandView == BandView.Follow) || (i >= 2 && bandView == BandView.Manual && manualBand == i - 2);
         }
         protected override void OnKeyDown(KeyEventArgs e)
         {
@@ -184,12 +213,15 @@ namespace N1TA.MofLof
             else if (k == Keys.A) ToggleAnim();
             else if (k == Keys.L) SetLive(!live);
             else if (k == Keys.F5) FetchAsync();
+            else if (k == Keys.T) PromptTarget();
+            else if (k == Keys.B) ToggleBandView();
+            else if (k == Keys.Escape) ClearTarget();
             else h = false;
             if (h) e.Handled = true; else base.OnKeyDown(e);
         }
 
         // ================= actions =================
-        void SetMode(Mode m) { mode = m; Redraw(); SyncMenu(); }
+        void SetMode(Mode m) { mode = m; bandView = BandView.Off; UpdateBest(); Redraw(); SyncMenu(); }
         void SetProj(Proj p) { proj = p; Redraw(); SyncMenu(); }
         void SetLive(bool v) { live = v; if (live) { T = DateTime.UtcNow; Recompute(); } SyncMenu(); }
         void ToggleAnim() { anim.Enabled = !anim.Enabled; if (anim.Enabled) live = false; SyncMenu(); }
@@ -203,7 +235,7 @@ namespace N1TA.MofLof
         }
         bool ShowStart(bool startup)
         {
-            using (StartDialog d = new StartDialog(qGrid, T, live, auto, manSfi, manA, manK, noaa, outlook, startup))
+            using (StartDialog d = new StartDialog(qGrid, T, live, auto, manSfi, manA, manK, noaa, outlook, startup, udpOn, udpPort, udpRadio, udpStation, udp.Status))
             {
                 if (d.ShowDialog(this) != DialogResult.OK)
                 {
@@ -216,6 +248,7 @@ namespace N1TA.MofLof
                 }
                 qGrid = d.GridText; qLat = d.Lat; qLon = d.Lon; T = d.When; auto = d.Auto; live = d.Live;
                 manSfi = d.Sfi; manA = d.A; manK = d.K;
+                udpOn = d.UdpOn; udpPort = d.UdpPort; udpRadio = d.UdpRadio; udpStation = d.UdpStation; ApplyUdp(true);
                 if (d.FetchedCurrent != null) { MergeNoaa(d.FetchedCurrent); }
                 if (d.FetchedOutlook != null) outlook = d.FetchedOutlook;
                 SaveSettings();
@@ -287,13 +320,186 @@ namespace N1TA.MofLof
             else if (src == "NOAA now" && T.Date > DateTime.UtcNow.Date.AddDays(27)) src += " (beyond 27-day outlook)";
         }
 
+        // ================= single band view + radio feed =================
+        double ViewFreq
+        {
+            get
+            {
+                if (bandView == BandView.Follow) return udp.HasFreq ? udp.FreqMHz : double.NaN;
+                if (bandView == BandView.Manual) return Bands.ExtCenter[manualBand];
+                return double.NaN;
+            }
+        }
+        bool BandActive { get { double f = ViewFreq; return bandView != BandView.Off && !double.IsNaN(f) && Bands.Modelled(f); } }
+        string ModeName(string[] mn)
+        {
+            if (BandActive) return Bands.Describe(ViewFreq).ToUpperInvariant() + " BAND VIEW" + (bandView == BandView.Follow ? " - FOLLOWING RADIO" : "");
+            return mn[(int)mode];
+        }
+        string RadioStatusSuffix()
+        {
+            if (!udpOn) return "";
+            return "  |  Radio: " + (!udp.Running ? "feed not running" : (udp.HasFreq ? Bands.Label(udp.FreqMHz) : "waiting for data on UDP " + udp.Port));
+        }
+        void SetBandView(BandView v, int idx)
+        {
+            if (v == BandView.Follow && !udp.Running) { ShowStart(false); return; }
+            bandView = v; if (v == BandView.Manual) manualBand = idx;
+            UpdateBest(); Redraw(); SyncMenu();
+        }
+        void ToggleBandView() { if (bandView != BandView.Off) SetBandView(BandView.Off, 0); else if (udp.Running) SetBandView(BandView.Follow, 0); else SetBandView(BandView.Manual, manualBand); }
+        void ApplyUdp(bool userAction)
+        {
+            udp.Stop();
+            if (!udpOn) { if (bandView == BandView.Follow) bandView = BandView.Off; UpdateInfoSafe(); return; }
+            udp.RadioSel = udpRadio; udp.StationFilter = udpStation ?? "";
+            string err;
+            if (!udp.Start(udpPort, out err))
+            {
+                MessageBox.Show(this, "Could not listen on UDP port " + udpPort + ":\r\n" + err + "\r\n\r\nAnother program may already be using that port. Choose a different port here, and add it as an extra destination (for example 127.0.0.1:12061) in your logging program's broadcast settings.", "Radio feed");
+                return;
+            }
+            if (userAction || bandView == BandView.Off) bandView = BandView.Follow;
+            seenVer = -1; seenHas = false; UpdateInfoSafe();
+        }
+        void UpdateInfoSafe() { if (md != null) { UpdateBest(); Redraw(); } SyncMenu(); }
+        void PollUdp()
+        {
+            bool has = udp.HasFreq;
+            if (udp.Version != seenVer || has != seenHas) { seenVer = udp.Version; seenHas = has; if (md != null && bandView == BandView.Follow) { UpdateBest(); Redraw(); } }
+        }
+        void ShowRadioDiag()
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "Radio feed diagnostics"; f.ClientSize = new Size(760, 400); f.StartPosition = FormStartPosition.CenterParent;
+                TextBox t = new TextBox(); t.Multiline = true; t.ReadOnly = true; t.ScrollBars = ScrollBars.Both; t.WordWrap = false; t.Dock = DockStyle.Fill; t.Font = new Font("Courier New", 9f);
+                t.Text = "Copy this into a GitHub issue if your logger is not recognised.\r\n\r\n" + udp.Status() + "\r\nPackets: " + udp.Packets + " received, " + udp.Recognized + " recognised\r\n\r\n" + udp.LogText();
+                f.Controls.Add(t); t.Select(0, 0); f.ShowDialog(this);
+            }
+        }
+
+        // ================= target + best band =================
+        static string StateWord(BandState s) { return s == BandState.Open ? "OPEN" : (s == BandState.Marginal ? "MARGINAL" : "CLOSED"); }
+        static string BandLabel(int i) { return i < 0 ? "NONE" : Bands.Name[i] + " M"; }
+        class PathVals { public double Ms, Ml, Ls, Ll; }
+        PathVals Pv(double la, double lo)
+        {
+            double a1 = Prop.Rad(qLat), o1 = Prop.Rad(qLon), a2 = Prop.Rad(la), o2 = Prop.Rad(lo); PathVals p = new PathVals();
+            p.Ms = Prop.PathMof(a1, o1, a2, o2, false, cond); p.Ml = Prop.PathMof(a1, o1, a2, o2, true, cond);
+            p.Ls = Prop.PathLof(a1, o1, a2, o2, false, cond); p.Ll = Prop.PathLof(a1, o1, a2, o2, true, cond); return p;
+        }
+        void SetTarget(double la, double lo) { hasTarget = true; tLat = la; tLon = lo; tGrid = Grid.From(la, lo, 6); UpdateBest(); Redraw(); }
+        void ClearTarget() { if (!hasTarget) return; hasTarget = false; UpdateBest(); Redraw(); }
+        void PromptTarget()
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "Target"; f.FormBorderStyle = FormBorderStyle.FixedDialog; f.MaximizeBox = f.MinimizeBox = false; f.ShowInTaskbar = false;
+                f.StartPosition = FormStartPosition.CenterParent; f.ClientSize = new Size(330, 112);
+                Label l = new Label(); l.Text = "Target grid square (e.g. JN58 or JN58qm)"; l.Left = 12; l.Top = 12; l.Width = 300; f.Controls.Add(l);
+                TextBox t = new TextBox(); t.Left = 12; t.Top = 36; t.Width = 120; t.Text = hasTarget ? tGrid : ""; t.MaxLength = 8; f.Controls.Add(t);
+                Label msg = new Label(); msg.Left = 145; msg.Top = 39; msg.Width = 175; msg.ForeColor = Color.DarkRed; f.Controls.Add(msg);
+                Button ok = new Button(); ok.Text = "OK"; ok.Left = 12; ok.Top = 72; ok.Width = 80;
+                ok.Click += delegate { double la, lo; if (Grid.TryParse(t.Text, out la, out lo)) { f.DialogResult = DialogResult.OK; f.Close(); } else msg.Text = "Not a valid grid square."; };
+                Button clr = new Button(); clr.Text = "Clear target"; clr.Left = 100; clr.Top = 72; clr.Width = 100; clr.Click += delegate { f.DialogResult = DialogResult.Abort; f.Close(); };
+                Button cn = new Button(); cn.Text = "Cancel"; cn.Left = 208; cn.Top = 72; cn.Width = 80; cn.Click += delegate { f.DialogResult = DialogResult.Cancel; f.Close(); };
+                f.Controls.Add(ok); f.Controls.Add(clr); f.Controls.Add(cn); f.AcceptButton = ok; f.CancelButton = cn;
+                DialogResult r = f.ShowDialog(this);
+                if (r == DialogResult.OK) { double la, lo; if (Grid.TryParse(t.Text, out la, out lo)) SetTarget(la, lo); }
+                else if (r == DialogResult.Abort) ClearTarget();
+            }
+        }
+
+        void UpdateBest()
+        {
+            if (cond == null) return;
+            double ft = ViewFreq; bool tracked = bandView != BandView.Off && !double.IsNaN(ft) && Bands.Modelled(ft);
+            int tIdx = tracked ? Bands.ContestIndex(ft) : -1;
+            string note = "";
+            if (bandView == BandView.Follow)
+            {
+                if (!udp.Running) note = "Radio feed is not running. ";
+                else if (!udp.HasFreq) note = "Waiting for radio data on UDP " + udp.Port + ". ";
+                else if (!Bands.Modelled(udp.FreqMHz)) note = "Radio is on " + Bands.Label(udp.FreqMHz) + ", outside the HF model. ";
+            }
+            BandState[] st = new BandState[6]; best.Caption = "BEST BAND";
+            for (int i = 0; i < 6; i++) best.Sub[i] = "";
+            string capt = bandView == BandView.Follow ? "RADIO ON" : "BAND";
+            double la1 = Prop.Rad(qLat), lo1 = Prop.Rad(qLon);
+
+            if (hasTarget)
+            {
+                PathVals tv = Pv(tLat, tLon); bool[] lp = new bool[6];
+                for (int i = 0; i < 6; i++) { st[i] = Bands.Eval(tv.Ms, tv.Ls, tv.Ml, tv.Ll, Bands.Freq[i], out lp[i]); best.Sub[i] = st[i] == BandState.Closed ? "closed" : (lp[i] ? "long path" : "short path"); }
+                int b = Bands.Best(st); double km = Prop.Dist(la1, lo1, Prop.Rad(tLat), Prop.Rad(tLon)) * Prop.R;
+                string dist = string.Format(CultureInfo.InvariantCulture, "To {0}: {1:0} km / {2:0} mi", tGrid, km, km * MiPerKm);
+                string nvis = km < 1000 ? " Under 1000 km: NVIS / ground wave are not modelled." : "";
+                best.St = st;
+                if (tracked)
+                {
+                    bool tl; BandState ts = Bands.Eval(tv.Ms, tv.Ls, tv.Ml, tv.Ll, ft, out tl);
+                    best.Caption = capt; best.Big = Bands.Label(ft); best.BigColor = BestBandView.StateColor(ts); best.Best = tIdx;
+                    if (b >= 0) best.Sub[b] = "BEST";
+                    best.Text1 = dist + ". " + Bands.Label(ft) + " is " + StateWord(ts) + (ts != BandState.Closed ? (tl ? ", long path." : ", short path.") : ".");
+                    best.Text2 = note + (b < 0 ? "No contest band looks usable to this target right now." : (b == tIdx ? "This is the best band for this target." : "Best band for this target: " + BandLabel(b) + " (" + StateWord(st[b]) + ").")) + nvis;
+                }
+                else
+                {
+                    best.Best = b; best.Big = BandLabel(b); best.BigColor = b < 0 ? Color.Gray : BestBandView.StateColor(st[b]);
+                    string next = ""; int c = 0;
+                    for (int i = b - 1; i >= 0 && c < 2; i--) if (st[i] == BandState.Open) { next += (next.Length > 0 ? ", " : "") + Bands.Name[i] + " M"; c++; }
+                    best.Text1 = dist + (b >= 0 ? (st[b] == BandState.Open ? ". Open" : ". Marginal") + (Bands.Eval(tv.Ms, tv.Ls, tv.Ml, tv.Ll, Bands.Freq[b], out lp[b]) != BandState.Closed && lp[b] ? ", long path." : ", short path.") : ".");
+                    best.Text2 = note + (b < 0 ? "No band looks usable to this target right now." : (next.Length > 0 ? "Also good: " + next + "." : "")) + nvis + "  Right-click or Esc for the world summary.";
+                }
+            }
+            else
+            {
+                int n = 0; int[] open = new int[6], any = new int[6]; List<string>[] who = new List<string>[6];
+                for (int i = 0; i < 6; i++) who[i] = new List<string>();
+                int openT = 0, anyT = 0; List<string> whoT = new List<string>();
+                foreach (Region r in Bands.Regions)
+                {
+                    if (Prop.Dist(la1, lo1, Prop.Rad(r.Lat), Prop.Rad(r.Lon)) * Prop.R < Bands.MinRegionKm) continue;
+                    n++; PathVals p = Pv(r.Lat, r.Lon); bool l;
+                    for (int i = 0; i < 6; i++)
+                    {
+                        BandState s = Bands.Eval(p.Ms, p.Ls, p.Ml, p.Ll, Bands.Freq[i], out l);
+                        if (s == BandState.Open) { open[i]++; who[i].Add(r.Code); }
+                        if (s != BandState.Closed) any[i]++;
+                    }
+                    if (tracked) { BandState s = Bands.Eval(p.Ms, p.Ls, p.Ml, p.Ll, ft, out l); if (s == BandState.Open) { openT++; whoT.Add(r.Code); } if (s != BandState.Closed) anyT++; }
+                }
+                int need = Bands.NeededRegions(n); bool strong; int b = Bands.BestByCount(open, any, n, out strong);
+                for (int i = 0; i < 6; i++) { st[i] = open[i] >= need ? BandState.Open : (any[i] > 0 ? BandState.Marginal : BandState.Closed); best.Sub[i] = n == 0 ? "" : open[i] + " / " + n; }
+                best.St = st;
+                string next = ""; int c = 0;
+                for (int i = b - 1; i >= 0 && c < 2; i--) if (open[i] >= need) { next += (next.Length > 0 ? ", " : "") + Bands.Name[i] + " M (" + open[i] + "/" + n + ")"; c++; }
+                if (tracked)
+                {
+                    BandState ts = openT >= need ? BandState.Open : (anyT > 0 ? BandState.Marginal : BandState.Closed);
+                    best.Caption = capt; best.Big = Bands.Label(ft); best.BigColor = BestBandView.StateColor(ts); best.Best = tIdx;
+                    if (b >= 0) best.Sub[b] = "BEST " + open[b] + "/" + n;
+                    best.Text1 = "Radio on " + Bands.Describe(ft) + ": " + (whoT.Count > 0 ? "open to " + string.Join(" ", whoT.ToArray()) : (anyT > 0 ? "marginal only" : "closed to all distant regions")) + " (" + openT + "/" + n + ").";
+                    best.Text2 = note + (b < 0 ? "No contest band reaches distant regions right now." : (b == tIdx ? "This is the best band right now." : "Best now: " + BandLabel(b) + " (" + open[b] + "/" + n + ")" + (b > tIdx && strong ? ". Consider moving up." : "."))) + "  Click the map for a specific target.";
+                }
+                else
+                {
+                    best.Best = b; best.Big = BandLabel(b); best.BigColor = b < 0 ? Color.Gray : (strong ? BestBandView.StateColor(BandState.Open) : BestBandView.StateColor(BandState.Marginal));
+                    best.Text1 = b < 0 ? "No band reaches distant regions right now." : (strong ? "Open to: " : "Weak. Open to only: ") + (who[b].Count > 0 ? string.Join(" ", who[b].ToArray()) : "(marginal only)");
+                    best.Text2 = note + "Highest band open to at least " + need + " of " + n + " distant regions (over " + Bands.MinRegionKm.ToString("0") + " km / " + (Bands.MinRegionKm * MiPerKm).ToString("0") + " mi)." + (next.Length > 0 ? " Next: " + next + "." : "") + "  Click map for a target.";
+                }
+            }
+            best.Invalidate();
+        }
+
         // ================= compute =================
         void Recompute()
         {
             double s, a, k; ChooseConditions(out s, out a, out k, out dataSrc);
             if (auto && T.Date > DateTime.UtcNow.Date && outlook == null && (DateTime.UtcNow - lastNoaaTry).TotalSeconds > 20) FetchAsync();
             cond = new Cond(); cond.Sfi = s; cond.A = a; cond.K = k; cond.Month = T.Month; cond.Day = T.Day; cond.Hour = T.Hour + T.Minute / 60.0; cond.Derive();
-            ComputeGrid(); Redraw();
+            ComputeGrid(); UpdateBest(); Redraw();
         }
         void ComputeGrid()
         {
@@ -318,7 +524,7 @@ namespace N1TA.MofLof
         }
 
         // ================= drawing =================
-        static readonly int[] Pal = { unchecked((int)0xFF000000), unchecked((int)0xFF2846FF), unchecked((int)0xFF00BE00), unchecked((int)0xFFD20000) };
+        static readonly int[] Pal = { unchecked((int)0xFF000000), unchecked((int)0xFF2846FF), unchecked((int)0xFF00BE00), unchecked((int)0xFFD20000), unchecked((int)0xFFE6C800) };
         static int MofLevel(double v) { return v >= 28.5 ? 3 : (v >= 21.2 ? 2 : (v >= 14.15 ? 1 : 0)); }
         static int LofLevel(double v) { return v <= 1.85 ? 3 : (v <= 3.6 ? 2 : (v <= 7.1 ? 1 : 0)); }
         bool IsMof { get { return mode == Mode.MofShort || mode == Mode.MofLong || mode == Mode.MofComp || mode == Mode.Mof3k; } }
@@ -372,6 +578,16 @@ namespace N1TA.MofLof
             int W = map.ClientSize.Width, H = map.ClientSize.Height; if (W < 40 || H < 40) return;
             if (proj == Proj.Rect) { mw = Math.Min(W, 2 * H); mh = mw / 2; ox = (W - mw) / 2; oy = (H - mh) / 2; }
             else { cx = W / 2; cy = H / 2; rad = Math.Min(W, H) / 2 - 3; }
+            byte[] bl = null; bool[] bst = null;
+            if (BandActive)
+            {
+                int nc = md.Nx * md.Ny; bl = new byte[nc]; bst = new bool[nc]; double bf = ViewFreq;
+                for (int ii = 0; ii < nc; ii++)
+                {
+                    bool lp; BandState bs = Bands.Eval(md.MofS[ii], md.LofS[ii], md.MofL[ii], md.LofL[ii], bf, out lp);
+                    bl[ii] = (byte)(bs == BandState.Open ? 2 : (bs == BandState.Marginal ? 4 : 0)); bst[ii] = lp && bs != BandState.Closed;
+                }
+            }
             int[] px = new int[W * H]; for (int i = 0; i < px.Length; i++) px[i] = Pal[0];
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++)
@@ -379,7 +595,7 @@ namespace N1TA.MofLof
                     double la, lo; if (!Inverse(x + 0.5, y + 0.5, out la, out lo)) continue;
                     int ci = (int)((lo + 180) / md.Step); if (ci < 0) ci = 0; if (ci >= md.Nx) ci = md.Nx - 1;
                     int cj = (int)((90 - la) / md.Step); if (cj < 0) cj = 0; if (cj >= md.Ny) cj = md.Ny - 1;
-                    int lvl; bool st; CellColor(cj * md.Nx + ci, out lvl, out st);
+                    int lvl; bool st; int cidx = cj * md.Nx + ci; if (bl != null) { lvl = bl[cidx]; st = bst[cidx]; } else CellColor(cidx, out lvl, out st);
                     if (lvl == 0) continue;
                     if (st && ((x / 2) & 1) == 1) continue;
                     px[y * W + x] = Pal[lvl];
@@ -447,6 +663,18 @@ namespace N1TA.MofLof
                     Poly(g, runRise ? solid : dash, run);
                 }
             }
+            if (hasTarget)
+            {
+                using (Pen tp = new Pen(Color.FromArgb(255, 230, 0), 2))
+                {
+                    double d = Prop.Dist(Prop.Rad(qLat), Prop.Rad(qLon), Prop.Rad(tLat), Prop.Rad(tLon)), br = Prop.Bearing(Prop.Rad(qLat), Prop.Rad(qLon), Prop.Rad(tLat), Prop.Rad(tLon));
+                    List<double[]> l = new List<double[]>();
+                    for (int i = 0; i <= 60; i++) { double la, lo; Prop.Dest(Prop.Rad(qLat), Prop.Rad(qLon), br, d * i / 60.0, out la, out lo); l.Add(new double[] { Prop.Deg(lo), Prop.Deg(la) }); }
+                    Poly(g, tp, l);
+                    float tx, ty; Forward(tLat, tLon, out tx, out ty);
+                    g.DrawEllipse(tp, tx - 6, ty - 6, 12, 12); g.DrawLine(tp, tx - 9, ty, tx + 9, ty); g.DrawLine(tp, tx, ty - 9, tx, ty + 9);
+                }
+            }
             float qx, qy; Forward(qLat, qLon, out qx, out qy);
             g.FillRectangle(Brushes.White, qx - 4, qy - 4, 8, 8);
         }
@@ -455,15 +683,16 @@ namespace N1TA.MofLof
         {
             string[] mn = { "SHORT PATH MOF", "LONG PATH MOF", "COMPOSITE MOF", "SHORT PATH LOF", "LONG PATH LOF", "COMPOSITE LOF", "3000 KM (1864 MI) HOP MOF", "3000 KM (1864 MI) HOP LOF" };
             info.Text = string.Format(" {0}  {1:dd MMM yyyy HH:mm}Z {2}  SFI {3:0}  A {4:0}  K {5:0.#}  SSN {6:0}  QTH {7} {8}",
-                mn[(int)mode], T, live ? "LIVE" : "FIXED", cond.Sfi, cond.A, cond.K, cond.Ssn, qGrid, LatLon(qLat, qLon));
+                ModeName(mn), T, live ? "LIVE" : "FIXED", cond.Sfi, cond.A, cond.K, cond.Ssn, qGrid, LatLon(qLat, qLon));
             pNoaa.Text = (auto ? noaaStatus + "  |  " : "NOAA automatic update is off  |  ") + "using " + dataSrc + "   (click to change)";
             pNoaa.ToolTipText = "Click to change location, date and solar data. Help > NOAA diagnostics shows what NOAA returned.";
             bool mof = IsMof;
             string suffix = (mode == Mode.MofLong || mode == Mode.LofLong) ? "  (striped = long path)" : (mode == Mode.MofComp || mode == Mode.LofComp ? "  (striped = long path is better)" : "");
-            if (mof) { legend.Labels = new string[] { "20M  MOF>=14.15", "15M  MOF>=21.2", "10M  MOF>=28.5", "white square = QTH" + suffix }; }
-            else { legend.Labels = new string[] { "40M  LOF<=7.1", "80M  LOF<=3.6", "160M  LOF<=1.85", "white square = QTH" + suffix }; }
+            if (BandActive) { legend.Labels = new string[] { Bands.Label(ViewFreq) + " open", "marginal", "black = closed", "white square = QTH, yellow = target" + (suffix.Length > 0 ? "" : "  (striped = long path)") }; legend.Col = new Color[] { Color.FromArgb(0, 0xBE, 0), Color.FromArgb(0xE6, 0xC8, 0), Color.Empty, Color.Empty }; legend.Invalidate(); pNoaa.Text += RadioStatusSuffix(); return; }
+            if (mof) { legend.Labels = new string[] { "20M  MOF>=14.15", "15M  MOF>=21.2", "10M  MOF>=28.5", "white square = QTH, yellow = target" + suffix }; }
+            else { legend.Labels = new string[] { "40M  LOF<=7.1", "80M  LOF<=3.6", "160M  LOF<=1.85", "white square = QTH, yellow = target" + suffix }; }
             legend.Col = new Color[] { Color.FromArgb(0x28, 0x46, 0xFF), Color.FromArgb(0, 0xBE, 0), Color.FromArgb(0xD2, 0, 0), Color.Empty };
-            legend.Invalidate();
+            legend.Invalidate(); pNoaa.Text += RadioStatusSuffix();
         }
         static string LatLon(double la, double lo) { return string.Format(CultureInfo.InvariantCulture, "{0:0.00}{1} {2:0.00}{3}", Math.Abs(la), la >= 0 ? "N" : "S", Math.Abs(lo), lo >= 0 ? "E" : "W"); }
 
@@ -516,6 +745,8 @@ namespace N1TA.MofLof
                         case "sfi": if (dv) manSfi = d; break; case "a": if (dv) manA = d; break; case "k": if (dv) manK = d; break;
                         case "mode": if (dv && d >= 0 && d < 8) mode = (Mode)(int)d; break; case "proj": if (dv && d >= 0 && d < 3) proj = (Proj)(int)d; break;
                         case "step": if (dv && d >= 1) step = d; break;
+                        case "udp": udpOn = v == "1"; break; case "udpport": if (dv && d >= 1 && d <= 65535) udpPort = (int)d; break;
+                        case "udpradio": if (dv && d >= 0 && d <= 4) udpRadio = (int)d; break; case "udpstation": udpStation = v; break;
                         case "sun": ovSun = v == "1"; break; case "rad": ovRadials = v == "1"; break; case "gridlines": ovGrid = v == "1"; break;
                     }
                 }
@@ -532,6 +763,7 @@ namespace N1TA.MofLof
                     "grid=" + qGrid, "auto=" + (auto ? 1 : 0), "live=" + (live ? 1 : 0),
                     "sfi=" + manSfi.ToString(ci), "a=" + manA.ToString(ci), "k=" + manK.ToString(ci),
                     "mode=" + (int)mode, "proj=" + (int)proj, "step=" + step.ToString(ci),
+                    "udp=" + (udpOn ? 1 : 0), "udpport=" + udpPort, "udpradio=" + udpRadio, "udpstation=" + udpStation,
                     "sun=" + (ovSun ? 1 : 0), "rad=" + (ovRadials ? 1 : 0), "gridlines=" + (ovGrid ? 1 : 0) });
             }
             catch { }
@@ -540,7 +772,7 @@ namespace N1TA.MofLof
 
     public static class HelpText
     {
-        public static string Version = "1.1.0";
+        public static string Version = "1.2.0";
         public static string About =
             "N1TA MOF/LOF " + Version + "\r\n\r\n" +
             "A from-scratch rewrite of the idea behind K1TTT's MOF/LOF\r\n" +
@@ -553,8 +785,8 @@ namespace N1TA.MofLof
             "has not read this program.\r\n\r\n" +
             "github.com/mfdechristopher/N1TA-MOF-LOF";
         public static string Notes =
-            "Distances are shown in kilometers and miles everywhere (1 km = 0.6214 mi).\r\n\r\nKeys: 1-8 display, Enter/Space next hour, Backspace previous,\r\n" +
-            "R/X/G projection, S sun lines, P radials, A animate, L live, F5 refresh NOAA, Ctrl+S location/date/solar data.\r\n\r\n" +
+            "Distances are shown in kilometers and miles everywhere (1 km = 0.6214 mi).\r\n\r\nBEST BAND banner: for the whole world it names the highest band that is OPEN to at least a\nthird of 18 distant regions (over 1500 km / 932 mi). Click the map (or press T) to get\nthe best band to one specific target; right-click or Esc clears it. OPEN = well between LOF\nand MOF on the short or long path, MARGINAL = within 15% of either edge, closed = outside.\nContest bands are judged at 1.85, 3.6, 7.1, 14.15, 21.2 and 28.5 MHz.\n\nRADIO FOLLOWING: on the Start screen, tick the UDP option and set the port. The map then\nshows only the band your radio is on (green open, yellow marginal), and the banner says\nwhether a better band exists. Press B to switch single-band view on and off.\n\nKeys: 1-8 display, Enter/Space next hour, Backspace previous,\r\n" +
+            "R/X/G projection, S sun lines, P radials, A animate, L live, F5 refresh NOAA, Ctrl+S location/date/solar data, T target, Esc clear target, B single-band view.\r\n\r\n" +
             "Map colours: MOF - blue 20M, green 15M, red 10M.\r\n" +
             "             LOF - blue 40M, green 80M, red 160M.\r\n" +
             "Striped cells are the long path.\r\n\r\n" +
