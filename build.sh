@@ -8,5 +8,6 @@ mcs -target:winexe -optimize+ -sdk:4.5 \
     -r:System.Windows.Forms.dll -r:System.Drawing.dll \
     -win32icon:res/n1ta.ico \
     -resource:res/coast.txt,coast.txt \
+    -resource:res/cty.dat,cty.dat \
     -out:dist/N1TA_MOFLOF.exe src/*.cs
 echo "Built dist/N1TA_MOFLOF.exe"

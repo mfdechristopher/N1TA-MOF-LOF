@@ -54,6 +54,28 @@ Pick the date in the Start screen. The map is drawn for that exact UTC date and 
 
 Open **Help → NOAA diagnostics**. It lists every request, what came back, and what the program made of it, and it's built for pasting into a [GitHub issue](../../issues). The program never stops working over this: it just uses your manual numbers.
 
+## Look back: log analysis
+
+Contesters can import a log and see how well the prediction matched what actually happened.
+
+1. **Log → Open a Cabrillo or ADIF log...** (or give the file on the command line, drag it onto the exe, or use "Open with"). Cabrillo (any contest) and ADIF (`.adi`) both work. A [synthetic sample](docs/sample-log-synthetic.cbr) is included for trying it out.
+2. The program asks for the solar flux, A and K **for the log's own period**. NOAA's automatic data only covers today, so type in that weekend's numbers. The boxes start with today's values, which are close for a recent log.
+3. The map jumps to the first hour of the log. Every QSO of the hour on screen is a **dot in its band's colour**: 20 and 40 m blue, 15 and 80 m green, 10 and 160 m red (30, 60, 17 and 12 m borrow the nearest). A **white X** on a dot means the prediction called that band **closed** at that time on that path, yet you worked it.
+4. **Enter / Backspace** step through the log hour by hour, **A** animates the whole contest, **Home / End** jump to the first and last QSO. Hover a dot for its call, band, distance (km and miles) and what the prediction said. The status bar counts the hour's QSOs: open, marginal, **MISSED**.
+5. **Log → Analysis report...** gives the totals, a per-band table, a per-hour table and the twelve biggest misses, and saves as a text file.
+
+![Log analysis: QSO dots for one hour](docs/screenshot-log-map.png)
+
+*One hour of the synthetic sample. Blue dots are 40 m QSOs, the red dot with the X is a 10 m QSO the prediction called closed.*
+
+![Log analysis report](docs/screenshot-log-report.png)
+
+**What this can and can't tell you.** A completed QSO proves a band was open. It cannot prove that the bands you did *not* work were closed. So the report measures **misses** (predicted closed, but you worked it), not false alarms.
+
+**How worked stations are placed.** A Cabrillo file only has callsigns, so each station is put at its DXCC entity's location (AD1C's country files), or at the centre of its **call area** for the US and Canada (a single point for a whole country is far too coarse for propagation), or at its **grid square** if the log has one. That is approximate, and the report says so. QSOs closer than **1000 km (621 mi)** are left out of the judgement, because ground wave and NVIS are not part of an F2-layer model and would show up as false misses.
+
+If the log was made from a different location than the one set here (it knows from the log's grid), the program offers to use the log's location, and puts yours back when you close the log. **Log → Close log** returns everything to how it was.
+
 ## Keys
 
 | Key | What it does |
@@ -69,6 +91,7 @@ Open **Help → NOAA diagnostics**. It lists every request, what came back, and 
 | `S` | Sunrise (solid) and sunset (dashed) lines |
 | `P` | Great-circle radials from your QTH, every 30° |
 | `F5` | Re-fetch NOAA data now |
+| `Home` / `End` | With a log open: first / last QSO |
 | `Ctrl+S` | Location, date and solar data |
 
 **Striped cells are the long path.** In the composite views, stripes mean the long way round beats the short way.
@@ -108,6 +131,7 @@ Higher bands imply the lower ones. Red on a MOF map means 20 and 15 are open too
 * MINIMUF is an F-region model. It knows nothing about sporadic E, grey-line enhancement, or that one guy with the 4-element 160 m array.
 * Daily flux is noisy. NOAA's "now" value drives the map; a 3-to-30-day average is a steadier planning input, which is what the Start box is for.
 * Tested: the engine against the Navy's published sample; the NOAA parsers against samples of the documented feed layouts (including garbage input, which must not throw); the Maidenhead conversion; and the full GUI under Mono on a virtual display (first-run prompt, saved grid, manual entry, all eight map modes, three projections). **Not yet tested:** on a real Windows machine, and against NOAA's live servers (the build environment couldn't reach them). The first public release shipped with a NOAA parser that guessed one file layout wrong; 1.1.0 dropped that file and made every parser tolerant. If NOAA still won't load for you, **Help → NOAA diagnostics** has the evidence.
+* Log analysis was tested with Cabrillo and ADIF samples in the common formats (CQ WW, NAQP- and ARRL DX-style exchanges, grid-square exchanges, ADIF with and without a grid, malformed lines) and a synthetic sample log. **Not yet tested with real contest logs from real contests**: if yours imports oddly, send me the offending line.
 * The date picker accepts typing on Windows; the Linux test rig could not drive it, so date entry was checked by reading, not by clicking.
 
 ## Build it yourself
@@ -127,10 +151,15 @@ Layout:
 src/Engine.cs       propagation maths (MINIMUF 3.5, LOF, storm tweaks, sun position)
 src/Noaa.cs         SWPC fetch + tolerant parsers + diagnostics log
 src/Grid.cs         Maidenhead <-> lat/lon
+src/Bands.cs        band tables, the blue/green/red colour scheme, open/marginal/closed judgement
+src/CallDb.cs       callsign -> location (AD1C cty.dat, embedded)
+src/LogFile.cs      Cabrillo and ADIF import
+src/LogAnalysis.cs  per-QSO evaluation and the report
 src/MainForm.cs     the window, the map renderer, settings
 src/StartDialog.cs  the one input screen: grid, date/time, solar data
 src/SelfTest.cs     --selftest
 res/coast.txt       Natural Earth 110m coastline, reduced
+res/cty.dat         AD1C country files (callsign prefixes and entity locations)
 build.sh            one-line build
 ```
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+- **Added: log analysis.** Import a Cabrillo or ADIF log and plot its QSOs on the map hour by hour, in the program's blue / green / red band colours, marking QSOs the prediction called closed. Step with Enter/Backspace, animate with A, jump with Home/End, hover a dot for details, and open an analysis report (overall, by band, by hour, largest misses) that can be saved as text.
+- **Added:** callsign-to-location from AD1C's country files (embedded), with call-area centres for the US and Canada; grid squares in the log are used when present.
+- **Added:** QSOs closer than 1000 km (621 mi) are not judged (ground wave / NVIS are outside an F2 model).
+- **Added:** a log can be named on the command line (also "Open with" and drag onto the exe).
+- **Added:** the program offers to use the log's own station location, and restores yours when the log is closed.
+- Self-test expanded to 59 checks (callsign database, Cabrillo and ADIF parsing, evaluation, report).
+
 ## 1.1.0
 Fixes and changes after first field testing.
 - **Fixed:** NOAA automatic mode reported "unreachable" and "input string was not in a correct format". Cause: a parser for NOAA's daily-indices text file assumed a column layout that does not match the real file. That file is no longer used. The A index is now the mean of the last 24 h of 3-hourly values from the planetary Kp feed, and every NOAA parser is non-throwing and layout-tolerant.

@@ -72,6 +72,10 @@ namespace N1TA.MofLof
         Cond cond = new Cond(); string dataSrc = "";
         MapData md; List<double[]> coast = new List<double[]>();
 
+        // ---- log analysis ----
+        LogData log; bool logPrevAuto, logPrevLive; string logPrevGrid = ""; double logPrevLat, logPrevLon, logPrevSfi, logPrevA, logPrevK;
+        double logSfi, logA, logK; string logSolarNote = ""; MenuItem miLogReport, miLogClose, miLogFirst, miLogLast;
+
         // ---- ui ----
         MapView map = new MapView(); Label info = new Label(); Legend legend = new Legend();
         StatusBar sb = new StatusBar(); StatusBarPanel pNoaa = new StatusBarPanel(); Label readout = new Label();
@@ -102,7 +106,7 @@ namespace N1TA.MofLof
             tick.Interval = 15000; tick.Tick += OnTick; tick.Start();
             anim.Interval = 700; anim.Tick += delegate { Advance(1); };
             Shown += delegate { BeginInvoke(new MethodInvoker(Startup)); };
-            FormClosing += delegate { SaveSettings(); };
+            FormClosing += delegate { if (log != null) RestoreFromLog(); SaveSettings(); };
         }
 
         // Ask for the grid square every time the program opens (pre-filled with last time's answer).
@@ -110,6 +114,7 @@ namespace N1TA.MofLof
         {
             if (live) T = DateTime.UtcNow;
             ShowStart(true);
+            if (StartLog != null && qGrid.Length > 0) { string p = StartLog; StartLog = null; OpenLogPath(p); }
         }
 
         // ================= menu =================
@@ -156,11 +161,19 @@ namespace N1TA.MofLof
             }
             disp.MenuItems.Add(res);
 
+            MenuItem lg = new MenuItem("&Log");
+            lg.MenuItems.Add(new MenuItem("&Open a Cabrillo or ADIF log...", delegate { OpenLog(); }));
+            miLogReport = new MenuItem("&Analysis report...", delegate { ShowLogReport(); }); lg.MenuItems.Add(miLogReport);
+            miLogClose = new MenuItem("&Close log", delegate { CloseLog(); }); lg.MenuItems.Add(miLogClose);
+            lg.MenuItems.Add(new MenuItem("-"));
+            miLogFirst = new MenuItem("Go to &first QSO\tHome", delegate { GoToLog(true); }); lg.MenuItems.Add(miLogFirst);
+            miLogLast = new MenuItem("Go to &last QSO\tEnd", delegate { GoToLog(false); }); lg.MenuItems.Add(miLogLast);
+
             MenuItem help = new MenuItem("&Help");
             help.MenuItems.Add(new MenuItem("&Notes", delegate { MessageBox.Show(this, HelpText.Notes, "N1TA MOF/LOF - Notes"); }));
             help.MenuItems.Add(new MenuItem("NOAA &diagnostics", delegate { ShowDiag(); }));
             help.MenuItems.Add(new MenuItem("&About", delegate { MessageBox.Show(this, HelpText.About, "About N1TA MOF/LOF"); }));
-            m.MenuItems.AddRange(new MenuItem[] { file, calc, disp, help });
+            m.MenuItems.AddRange(new MenuItem[] { file, calc, disp, lg, help });
             Menu = m; SyncMenu();
         }
         void SyncMenu()
@@ -170,6 +183,7 @@ namespace N1TA.MofLof
             double[] steps = { 2, 4, 6, 9 }; for (int i = 0; i < miRes.Length; i++) miRes[i].Checked = steps[i] == step;
             miSun.Checked = ovSun; miRad.Checked = ovRadials; miGrid.Checked = ovGrid;
             miLive.Checked = live; miAnim.Checked = anim.Enabled;
+            miLogReport.Enabled = miLogClose.Enabled = miLogFirst.Enabled = miLogLast.Enabled = (log != null);
         }
         protected override void OnKeyDown(KeyEventArgs e)
         {
@@ -184,6 +198,8 @@ namespace N1TA.MofLof
             else if (k == Keys.A) ToggleAnim();
             else if (k == Keys.L) SetLive(!live);
             else if (k == Keys.F5) FetchAsync();
+            else if (k == Keys.Home && log != null) GoToLog(true);
+            else if (k == Keys.End && log != null) GoToLog(false);
             else h = false;
             if (h) e.Handled = true; else base.OnKeyDown(e);
         }
@@ -285,6 +301,143 @@ namespace N1TA.MofLof
             if (got == 0) src = "manual values (no NOAA data yet)"; else if (got < 3) src = src + " + manual fill";
             if (T.Date < DateTime.UtcNow.Date && got > 0) src += " (past date: today's values)";
             else if (src == "NOAA now" && T.Date > DateTime.UtcNow.Date.AddDays(27)) src += " (beyond 27-day outlook)";
+        }
+
+        // ================= log analysis =================
+        List<Qso> CurrentQsos() { return log == null ? new List<Qso>() : LogAnalysis.InHour(log, LogAnalysis.HourStart(T)); }
+
+        void OpenLog()
+        {
+            if (qGrid.Length == 0) return;
+            if (log != null && MessageBox.Show(this, "A log is already open. Replace it?", "Open log", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            string path;
+            using (OpenFileDialog d = new OpenFileDialog())
+            {
+                d.Title = "Open a contest or station log"; d.Filter = "Cabrillo or ADIF logs|*.log;*.cbr;*.cabrillo;*.adi;*.adif;*.txt|All files|*.*";
+                if (d.ShowDialog(this) != DialogResult.OK) return; path = d.FileName;
+            }
+            OpenLogPath(path);
+        }
+
+        public string StartLog;      // a log named on the command line (or "Open with"), opened after the Start screen
+        void OpenLogPath(string path)
+        {
+            if (qGrid.Length == 0) return;
+            LogData L;
+            try { Cursor = Cursors.WaitCursor; L = LogFile.Load(path); }
+            catch (Exception ex) { Cursor = Cursors.Default; MessageBox.Show(this, ex.Message, "Cannot open log"); return; }
+            finally { Cursor = Cursors.Default; }
+            if (L.Qsos.Count == 0)
+            {
+                MessageBox.Show(this, string.Format("No usable HF QSOs were found in this file.\r\n\r\n{0} lines read: {1} not HF, {2} with no callsign found, {3} with a bad date or time.", L.Total, L.NotHf, L.NoCall, L.BadTime), "Open log");
+                return;
+            }
+            if (log != null) CloseLog();
+
+            // The log may have been made somewhere other than the location set here.
+            string prevGrid = qGrid; double pLat = qLat, pLon = qLon; bool movedQth = false;
+            double gla, glo;
+            if (L.MyGrid.Length > 0 && Grid.TryParse(L.MyGrid, out gla, out glo) && Prop.Dist(Prop.Rad(qLat), Prop.Rad(qLon), Prop.Rad(gla), Prop.Rad(glo)) * Prop.R > 50)
+            {
+                if (MessageBox.Show(this, "This log says it was made from " + L.MyGrid + ", but your location is set to " + qGrid + ".\r\n\r\nUse the log's location for this analysis? (Your own location is restored when you close the log.)", "Station location", MessageBoxButtons.YesNo) == DialogResult.Yes)
+                { qGrid = L.MyGrid; qLat = gla; qLon = glo; movedQth = true; }
+            }
+
+            double s, a, k; string src; ChooseConditions(out s, out a, out k, out src);
+            if (!AskLogSolar(L, ref s, ref a, ref k)) { if (movedQth) { qGrid = prevGrid; qLat = pLat; qLon = pLon; } return; }
+
+            logPrevGrid = movedQth ? prevGrid : ""; logPrevLat = pLat; logPrevLon = pLon;
+            logPrevAuto = auto; logPrevLive = live; logPrevSfi = manSfi; logPrevA = manA; logPrevK = manK;
+            logSfi = s; logA = a; logK = k; logSolarNote = "entered for this log";
+            auto = false; live = false; anim.Enabled = false; manSfi = s; manA = a; manK = k;
+            log = L; LogAnalysis.Evaluate(log, qLat, qLon, logSfi, logA, logK);
+            T = LogAnalysis.HourStart(log.First);
+            Recompute(); SyncMenu();
+            int n = 0; foreach (Qso q in log.Qsos) if (q.Evaluated) n++;
+            MessageBox.Show(this, string.Format("Loaded {0} QSOs ({1} analysed) from {2:yyyy-MM-dd HH:mm}Z to {3:yyyy-MM-dd HH:mm}Z.\r\n\r\nEnter and Backspace step through the log hour by hour, A animates it, Home and End jump to the first and last QSO. Dots are the QSOs of the hour shown; a dot with an X is one the prediction called closed.\r\n\r\nLog > Analysis report summarises how well the prediction held up.", log.Qsos.Count, n, log.First, log.Last), "Log loaded");
+        }
+
+        // The model needs the solar flux and geomagnetic conditions of the log's own period.
+        bool AskLogSolar(LogData L, ref double sfi, ref double a, ref double k)
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "Solar data for this log"; f.FormBorderStyle = FormBorderStyle.FixedDialog; f.MaximizeBox = f.MinimizeBox = false; f.ShowInTaskbar = false;
+                f.StartPosition = FormStartPosition.CenterParent; f.ClientSize = new Size(440, 214);
+                Label l = new Label(); l.Left = 14; l.Top = 12; l.Width = 412; l.Height = 84;
+                l.Text = string.Format(CultureInfo.InvariantCulture, "The prediction depends on the solar flux and geomagnetic activity of the log's own period ({0:yyyy-MM-dd} to {1:yyyy-MM-dd}). NOAA's automatic data only covers today, so enter the values for that period. The boxes start with today's values; for a recent log those are usually close, but for an older one please look up that weekend's 10.7 cm flux and A / K.", L.First, L.Last);
+                f.Controls.Add(l);
+                TextBox tS = new TextBox(), tA = new TextBox(), tK = new TextBox(); Label[] ls = { new Label(), new Label(), new Label() }; TextBox[] ts = { tS, tA, tK };
+                double rS = sfi, rA = a, rK = k;   // lambdas cannot capture ref parameters
+                string[] names = { "Solar flux (SFI)", "A index", "K index" }; double[] vals = { sfi, a, k };
+                for (int i = 0; i < 3; i++) { ls[i].Text = names[i]; ls[i].Left = 14 + i * 140; ls[i].Top = 108; ls[i].Width = 120; ts[i].Left = 14 + i * 140; ts[i].Top = 130; ts[i].Width = 80; ts[i].Text = vals[i].ToString("0.##", CultureInfo.InvariantCulture); f.Controls.Add(ls[i]); f.Controls.Add(ts[i]); }
+                Label msg = new Label(); msg.Left = 14; msg.Top = 160; msg.Width = 412; msg.ForeColor = Color.DarkRed; f.Controls.Add(msg);
+                Button ok = new Button(); ok.Text = "Analyse"; ok.Left = 250; ok.Top = 180; ok.Width = 84;
+                Button cn = new Button(); cn.Text = "Cancel"; cn.Left = 342; cn.Top = 180; cn.Width = 84;
+                ok.Click += delegate
+                {
+                    double v1, v2, v3;
+                    if (!double.TryParse(tS.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out v1) || v1 < 50 || v1 > 400) { msg.Text = "Solar flux must be a number between 50 and 400."; return; }
+                    if (!double.TryParse(tA.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out v2) || v2 < 0 || v2 > 400) { msg.Text = "A index must be a number between 0 and 400."; return; }
+                    if (!double.TryParse(tK.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out v3) || v3 < 0 || v3 > 9) { msg.Text = "K index must be a number between 0 and 9."; return; }
+                    rS = v1; rA = v2; rK = v3; f.DialogResult = DialogResult.OK; f.Close();
+                };
+                cn.Click += delegate { f.DialogResult = DialogResult.Cancel; f.Close(); };
+                f.Controls.Add(ok); f.Controls.Add(cn); f.AcceptButton = ok; f.CancelButton = cn;
+                if (f.ShowDialog(this) != DialogResult.OK) return false;
+                sfi = rS; a = rA; k = rK; return true;
+            }
+        }
+
+        void RestoreFromLog()
+        {
+            if (logPrevGrid.Length > 0) { qGrid = logPrevGrid; qLat = logPrevLat; qLon = logPrevLon; }
+            auto = logPrevAuto; live = logPrevLive; manSfi = logPrevSfi; manA = logPrevA; manK = logPrevK;
+        }
+        void CloseLog()
+        {
+            if (log == null) return;
+            RestoreFromLog(); log = null; anim.Enabled = false;
+            if (live) T = DateTime.UtcNow;
+            Recompute(); SyncMenu();
+            if (auto) FetchAsync();
+        }
+        void GoToLog(bool first)
+        {
+            if (log == null) return;
+            live = false; T = LogAnalysis.HourStart(first ? log.First : log.Last); Recompute(); SyncMenu();
+        }
+        void ShowLogReport()
+        {
+            if (log == null) return;
+            string text = LogAnalysis.Report(log, qGrid, qLat, qLon, logSfi, logA, logK, logSolarNote);
+            using (Form f = new Form())
+            {
+                f.Text = "Log analysis"; f.ClientSize = new Size(820, 520); f.StartPosition = FormStartPosition.CenterParent;
+                TextBox t = new TextBox(); t.Multiline = true; t.ReadOnly = true; t.ScrollBars = ScrollBars.Both; t.WordWrap = false; t.Dock = DockStyle.Fill; t.Font = new Font("Courier New", 9f); t.Text = text;
+                Panel p = new Panel(); p.Dock = DockStyle.Bottom; p.Height = 38;
+                Button sv = new Button(); sv.Text = "Save as text file..."; sv.Left = 8; sv.Top = 6; sv.Width = 140;
+                sv.Click += delegate
+                {
+                    using (SaveFileDialog d = new SaveFileDialog())
+                    {
+                        d.Filter = "Text file (*.txt)|*.txt"; d.FileName = "N1TA_log_analysis_" + (log.MyCall.Length > 0 ? log.MyCall + "_" : "") + log.First.ToString("yyyyMMdd") + ".txt";
+                        if (d.ShowDialog(f) == DialogResult.OK) { try { File.WriteAllText(d.FileName, text); } catch (Exception ex) { MessageBox.Show(f, ex.Message, "Cannot save"); } }
+                    }
+                };
+                Button cl = new Button(); cl.Text = "Close"; cl.Left = 160; cl.Top = 6; cl.Width = 80; cl.Click += delegate { f.Close(); };
+                p.Controls.Add(sv); p.Controls.Add(cl);
+                f.Controls.Add(t); f.Controls.Add(p); t.Select(0, 0); f.ShowDialog(this);
+            }
+        }
+        string QsoText(Qso q)
+        {
+            string l1 = string.Format(CultureInfo.InvariantCulture, "QSO {0}  {1:0.000} MHz ({2})  {3:yyyy-MM-dd HH:mm}Z  {4}  {5:0} km / {6:0} mi", q.Call, q.Mhz, Bands.Label(q.Mhz), q.Utc, q.Where, q.DistKm, q.DistKm * MiPerKm);
+            string l2;
+            if (!q.Located) l2 = "Prediction: callsign not located";
+            else if (!q.Evaluated) l2 = "Prediction: not judged (under " + LogAnalysis.NearKm.ToString("0") + " km / " + (LogAnalysis.NearKm * MiPerKm).ToString("0") + " mi: ground wave / NVIS)";
+            else l2 = string.Format(CultureInfo.InvariantCulture, "Prediction: {0} {1}   MOF {2}   LOF {3}   ({4} path)", Bands.Label(q.Mhz), q.State == BandState.Open ? "OPEN" : (q.State == BandState.Marginal ? "MARGINAL" : "CLOSED (a miss)"), q.Mof >= 31.99 ? ">=32" : q.Mof.ToString("0.0", CultureInfo.InvariantCulture), q.Lof <= 1.0001 ? "<1.0" : q.Lof.ToString("0.0", CultureInfo.InvariantCulture), q.LongPath ? "long" : "short");
+            return l1 + "\r\n" + l2;
         }
 
         // ================= compute =================
@@ -447,6 +600,21 @@ namespace N1TA.MofLof
                     Poly(g, runRise ? solid : dash, run);
                 }
             }
+            if (log != null)
+            {
+                // Each dot: band colour in the middle, a black ring, then a white halo, so it reads on any map colour
+                // (a blue 40 m dot on the blue 20 m region would otherwise vanish). A white X marks a predicted-closed QSO.
+                using (Pen halo = new Pen(Color.White, 1.5f)) using (Pen ring = new Pen(Color.Black, 2f)) using (Pen xp = new Pen(Color.White, 2f))
+                    foreach (Qso q in CurrentQsos())
+                    {
+                        if (!q.Located) continue;
+                        float qx0, qy0; Forward(q.Lat, q.Lon, out qx0, out qy0);
+                        using (Brush b = new SolidBrush(Bands.ColorOf(q.Mhz))) g.FillEllipse(b, qx0 - 4.5f, qy0 - 4.5f, 9, 9);
+                        g.DrawEllipse(ring, qx0 - 5.5f, qy0 - 5.5f, 11, 11);
+                        g.DrawEllipse(halo, qx0 - 7.5f, qy0 - 7.5f, 15, 15);
+                        if (q.Evaluated && q.State == BandState.Closed) { g.DrawLine(xp, qx0 - 3.5f, qy0 - 3.5f, qx0 + 3.5f, qy0 + 3.5f); g.DrawLine(xp, qx0 - 3.5f, qy0 + 3.5f, qx0 + 3.5f, qy0 - 3.5f); }
+                    }
+            }
             float qx, qy; Forward(qLat, qLon, out qx, out qy);
             g.FillRectangle(Brushes.White, qx - 4, qy - 4, 8, 8);
         }
@@ -463,12 +631,29 @@ namespace N1TA.MofLof
             if (mof) { legend.Labels = new string[] { "20M  MOF>=14.15", "15M  MOF>=21.2", "10M  MOF>=28.5", "white square = QTH" + suffix }; }
             else { legend.Labels = new string[] { "40M  LOF<=7.1", "80M  LOF<=3.6", "160M  LOF<=1.85", "white square = QTH" + suffix }; }
             legend.Col = new Color[] { Color.FromArgb(0x28, 0x46, 0xFF), Color.FromArgb(0, 0xBE, 0), Color.FromArgb(0xD2, 0, 0), Color.Empty };
+            if (log != null)
+            {
+                List<Qso> cur = CurrentQsos(); int o, mg, c, u; LogAnalysis.Count(cur, out o, out mg, out c, out u);
+                pNoaa.Text = string.Format("LOG {0}: {1} QSOs this hour (open {2}, marginal {3}, MISSED {4})  |  solar data entered for this log (Log menu for the report)", log.MyCall.Length > 0 ? log.MyCall : "(no call)", cur.Count, o, mg, c);
+                List<string> lb = new List<string>(legend.Labels); lb.Add("dot = QSO, X = predicted closed"); legend.Labels = lb.ToArray();
+                List<Color> cl = new List<Color>(legend.Col); cl.Add(Color.Empty); legend.Col = cl.ToArray();
+            }
             legend.Invalidate();
         }
         static string LatLon(double la, double lo) { return string.Format(CultureInfo.InvariantCulture, "{0:0.00}{1} {2:0.00}{3}", Math.Abs(la), la >= 0 ? "N" : "S", Math.Abs(lo), lo >= 0 ? "E" : "W"); }
 
         void OnMouse(object s, MouseEventArgs e)
         {
+            if (log != null)
+            {
+                Qso hit = null; double bestD = 10 * 10;
+                foreach (Qso q in CurrentQsos())
+                {
+                    if (!q.Located) continue; float qx0, qy0; Forward(q.Lat, q.Lon, out qx0, out qy0);
+                    double dd = (qx0 - e.X) * (qx0 - e.X) + (qy0 - e.Y) * (qy0 - e.Y); if (dd < bestD) { bestD = dd; hit = q; }
+                }
+                if (hit != null) { readout.Text = QsoText(hit); return; }
+            }
             double la, lo; if (md == null || !Inverse(e.X + 0.5, e.Y + 0.5, out la, out lo)) { readout.Text = ""; return; }
             int ci = Math.Min(md.Nx - 1, Math.Max(0, (int)((lo + 180) / md.Step))), cj = Math.Min(md.Ny - 1, Math.Max(0, (int)((90 - la) / md.Step))); int x = cj * md.Nx + ci;
             double km = Prop.Dist(Prop.Rad(qLat), Prop.Rad(qLon), Prop.Rad(la), Prop.Rad(lo)) * Prop.R;
@@ -540,7 +725,7 @@ namespace N1TA.MofLof
 
     public static class HelpText
     {
-        public static string Version = "1.1.0";
+        public static string Version = "1.2.0";
         public static string About =
             "N1TA MOF/LOF " + Version + "\r\n\r\n" +
             "A from-scratch rewrite of the idea behind K1TTT's MOF/LOF\r\n" +
@@ -554,7 +739,7 @@ namespace N1TA.MofLof
             "github.com/mfdechristopher/N1TA-MOF-LOF";
         public static string Notes =
             "Distances are shown in kilometers and miles everywhere (1 km = 0.6214 mi).\r\n\r\nKeys: 1-8 display, Enter/Space next hour, Backspace previous,\r\n" +
-            "R/X/G projection, S sun lines, P radials, A animate, L live, F5 refresh NOAA, Ctrl+S location/date/solar data.\r\n\r\n" +
+            "R/X/G projection, S sun lines, P radials, A animate, L live, F5 refresh NOAA, Ctrl+S location/date/solar data, Home/End first/last QSO of a log.\r\n\r\n" +
             "Map colours: MOF - blue 20M, green 15M, red 10M.\r\n" +
             "             LOF - blue 40M, green 80M, red 160M.\r\n" +
             "Striped cells are the long path.\r\n\r\n" +
@@ -565,6 +750,12 @@ namespace N1TA.MofLof
             "storm corrections: lower MOF at mid/high geomagnetic latitudes when K is\r\n" +
             "above 3, and extra D-layer/auroral absorption (higher LOF) when K is high.\r\n" +
             "These are heuristics, not published models.\r\n\r\n" +
+            "LOG ANALYSIS: Log > Open a Cabrillo or ADIF log. Each worked station is placed by callsign (DXCC\r\n" +
+            "entity, call-area centre for the US and Canada, or the grid square if the log has one) and shown as a\r\n" +
+            "dot in its band's colour for the hour on screen. A dot with an X is a QSO the prediction called closed.\r\n" +
+            "Step through the log with Enter/Backspace, animate with A. Hover a dot for its details. A QSO proves a\r\n" +
+            "band was open but cannot prove the others were closed, so the report counts misses, not false alarms.\r\n" +
+            "QSOs under 1000 km (621 mi) are not judged: ground wave and NVIS are not part of an F2 model.\r\n\r\n" +
             "Future dates in automatic mode use NOAA's 27-day outlook when available (up to 27 days ahead).\r\nBeyond that, or for past dates, choose Manual and enter the SFI/A/K you want.\r\nA is the mean of the last 24 hours of NOAA 3-hourly values.";
     }
 }

@@ -11,7 +11,9 @@ namespace N1TA.MofLof
             if (args.Length > 0 && args[0] == "--selftest") { Environment.Exit(SelfTest.Run()); return; }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm());
+            MainForm main = new MainForm();
+            if (args.Length > 0 && !args[0].StartsWith("--")) main.StartLog = args[0];     // a log file: command line, drag onto the exe, or "Open with"
+            Application.Run(main);
         }
     }
 }

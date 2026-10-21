@@ -14,11 +14,16 @@ N1TA MOF/LOF: a deliberately plain Windows desktop program that draws HF MOF and
 6. **Parsers never throw.** NOAA formats change. Parse with tolerant regexes, return NaN/empty on surprises, log to `Noaa.Log` (Help > NOAA diagnostics), and add the new sample to `SelfTest.cs`. Do not assume column positions in any NOAA text file; v1.0.0 did and shipped broken.
 7. **Never guess the user's location.** The grid square is asked at every start (pre-filled from `settings.ini`). No hard-coded default location.
 8. **Every distance shown to the user shows both km and miles.** Status readout, mode names, help text, README.
+9. **Log analysis must stay honest.** A QSO proves a band was open; it cannot prove the others were closed, so only MISSES are counted, never "false alarms". QSOs under 1000 km are not judged (an F2 model does not describe ground wave / NVIS). Worked-station locations are approximate and the report says so. Keep the original blue/green/red scheme for dots.
 
 ## Layout
 - `src/Engine.cs`: all propagation maths. Pure functions, no UI, no I/O.
 - `src/Noaa.cs`: HTTP fetch, tolerant parsers, diagnostics log. Feeds used: 10cm flux summary (+2 fallbacks), planetary Kp feed (A = mean of last 8 3-hourly a values), 27-day outlook.
 - `src/Grid.cs`: Maidenhead conversion.
+- `src/Bands.cs`: HF band table (160-10 m incl. WARC), the ORIGINAL colour scheme (20 & 40 m blue, 15 & 80 m green, 10 & 160 m red; other frequencies take the nearest contest band by log distance), and `State`/`Eval`: a band is Open / Marginal (within 15% of the MOF or LOF edge) / Closed at a frequency, best of short and long path. MINIMUF clips at 32 MHz, treated as "32 or more".
+- `src/CallDb.cs`: callsign -> location from the embedded AD1C `cty.dat`. cty.dat longitudes are positive WEST (converted here to east-positive). US and Canada are refined to the call-area centre (the first digit); everything else is the entity point. Handles `/P`, `/M`, a digit suffix (`W1AW/4`) and prefix forms (`EA8/DL1ABC`).
+- `src/LogFile.cs`: Cabrillo and ADIF import. The worked station is found by scanning for the first callsign-shaped token after our own call (exchanges vary by contest); a callsign needs a digit and at least two letters, which rules out 599, 5NN, 100W, states and names. ADIF is read as Latin-1 so byte lengths are exact. Bad lines are counted and skipped, never fatal.
+- `src/LogAnalysis.cs`: per-QSO evaluation and the report.
 - `src/MainForm.cs`: window, menu, per-pixel inverse-projection renderer, settings (`%APPDATA%\N1TA-MOFLOF\settings.ini`: grid, auto, live, manual sfi/a/k, mode, proj, step, overlays).
 - `src/StartDialog.cs`: the single input screen (grid, live/fixed date-time, automatic/manual solar data, fetch button). Shown at startup and via Ctrl+S.
 - `src/SelfTest.cs`: `--selftest` regression checks.

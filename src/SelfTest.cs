@@ -55,6 +55,69 @@ namespace N1TA.MofLof
             Check("grid rejects junk", !Grid.TryParse("ZZ99", out gla, out glo) && !Grid.TryParse("FN3", out gla, out glo) && !Grid.TryParse("", out gla, out glo));
             Check("3000 km is 1864 mi", Near(3000 * 0.621371, 1864, 0.5));
 
+            // ---- bands and colours (original scheme) ----
+            Check("band state: 20 m with MOF 24 / LOF 5 OPEN; 15 m MARGINAL; 10 m CLOSED", Bands.State(24, 5, 14.15) == BandState.Open && Bands.State(24, 5, 21.2) == BandState.Marginal && Bands.State(24, 5, 28.5) == BandState.Closed);
+            Check("band state: MOF clipped at 32 means 10 m is OPEN", Bands.State(32, 3, 28.5) == BandState.Open);
+            Check("colours: 20 & 40 m blue, 15 & 80 m green, 10 & 160 m red", Bands.ColorGroup(14.025) == 0 && Bands.ColorGroup(7.04) == 0 && Bands.ColorGroup(21.3) == 1 && Bands.ColorGroup(3.7) == 1 && Bands.ColorGroup(28.4) == 2 && Bands.ColorGroup(1.9) == 2);
+            Check("colours: WARC bands borrow the nearest (60 & 30 m blue, 17 m green, 12 m red)", Bands.ColorGroup(5.35) == 0 && Bands.ColorGroup(10.12) == 0 && Bands.ColorGroup(18.1) == 1 && Bands.ColorGroup(24.94) == 2);
+            Check("band lookup: 14.025 -> 20 m, 10.12 -> 30 m, 12.0 -> none", Bands.Name[Bands.IndexOf(14.025)] == "20" && Bands.Name[Bands.IndexOf(10.12)] == "30" && Bands.IndexOf(12.0) < 0);
+
+            // ---- callsign database (AD1C cty.dat, embedded) ----
+            double cla, clo; string cw;
+            Check("cty.dat loads (version 2026+, hundreds of entities)", CallDb.Lookup("DL1ABC", out cla, out clo, out cw) && CallDb.EntityCount > 300 && CallDb.Version >= 20260101);
+            Check("call W1AW -> US call area 1 (43.0N 71.5W)", CallDb.Lookup("W1AW", out cla, out clo, out cw) && cw == "United States (call area 1)" && Near(cla, 43.0, 0.01) && Near(clo, -71.5, 0.01));
+            Check("call K6XYZ -> call area 6, W1AW/4 -> call area 4 (digit suffix)", CallDb.Lookup("K6XYZ", out cla, out clo, out cw) && cw.EndsWith("area 6)") && CallDb.Lookup("W1AW/4", out cla, out clo, out cw) && cw.EndsWith("area 4)"));
+            Check("call VE3XYZ -> Canada area 3", CallDb.Lookup("VE3XYZ", out cla, out clo, out cw) && cw == "Canada (call area 3)" && Near(cla, 45.0, 0.01));
+            Check("call JA1ABC -> Japan, east longitude positive (138E)", CallDb.Lookup("JA1ABC", out cla, out clo, out cw) && cw == "Japan" && clo > 130 && clo < 145);
+            Check("call DL1ABC -> Germany (10E), DL1ABC/P same", CallDb.Lookup("DL1ABC", out cla, out clo, out cw) && cw.Contains("Germany") && Near(clo, 10.0, 0.5) && CallDb.Lookup("DL1ABC/P", out cla, out clo, out cw) && cw.Contains("Germany"));
+            Check("call EA8/DL1ABC -> Canary Islands (prefix form), KH6ABC -> Hawaii (west longitude negative)", CallDb.Lookup("EA8/DL1ABC", out cla, out clo, out cw) && cw.Contains("Canary") && CallDb.Lookup("KH6ABC", out cla, out clo, out cw) && cw == "Hawaii" && clo < -150);
+            Check("unknown callsign is not located, no throw", !CallDb.Lookup("XX0X", out cla, out clo, out cw) && !CallDb.Lookup("", out cla, out clo, out cw) && !CallDb.Lookup(null, out cla, out clo, out cw));
+            Check("callsign-shaped tokens: calls yes; 599, 5NN, 05, 100W, MA, MIKE no", LogFile.CallLike("W1AW") && LogFile.CallLike("3B8CF") && LogFile.CallLike("9A1A") && LogFile.CallLike("W1AW/4") && !LogFile.CallLike("599") && !LogFile.CallLike("5NN") && !LogFile.CallLike("05") && !LogFile.CallLike("100W") && !LogFile.CallLike("MA") && !LogFile.CallLike("MIKE"));
+
+            // ---- Cabrillo import ----
+            string cab = "START-OF-LOG: 3.0\nCALLSIGN: N1TA\nCONTEST: CQ-WW-CW\nGRID-LOCATOR: FN32pb\n" +
+                "QSO: 14025 CW 2024-11-23 0001 N1TA 599 05 W1AW 599 05 0\n" +
+                "QSO: 7005 CW 2024-11-23 0105 N1TA 599 05 DL1ABC 599 14 0\n" +
+                "QSO: 28025 CW 2024-11-23 0210 N1TA 599 05 JA1ABC 599 25 0\n" +
+                "QSO: 144 PH 2024-11-23 0300 N1TA 59 FN32 K1ZZ 59 FN42\n" +
+                "QSO: 21025 CW 2024-11-23 1500 N1TA 599 MA K5ZD 599 100\n" +
+                "QSO: 14025 CW 2024-11-23 2561 N1TA 599 05 W1AW 599 05\n" +
+                "QSO: 7025 CW 2024-11-23 1805 N1TA MIKE MA K5ZD RICK TX\n" +
+                "QSO: garbage\nEND-OF-LOG:\n";
+            LogData lg = LogFile.Parse(cab);
+            Check("Cabrillo header: call N1TA, contest, grid FN32pb", lg.Format == "Cabrillo" && lg.MyCall == "N1TA" && lg.Contest == "CQ-WW-CW" && lg.MyGrid == "FN32pb");
+            Check("Cabrillo: 5 QSOs read; 1 VHF, 1 bad time (2561), 1 short line skipped, none fatal", lg.Qsos.Count == 5 && lg.NotHf == 1 && lg.BadTime == 1 && lg.NoCall == 1);
+            Check("Cabrillo: HF kHz -> MHz and UTC time (7005 kHz at 01:05Z)", lg.Qsos[1].Call == "DL1ABC" && Near(lg.Qsos[1].Mhz, 7.005, 1e-9) && lg.Qsos[1].Utc == new DateTime(2024, 11, 23, 1, 5, 0));
+            Check("Cabrillo: worked call found past a name/state exchange (NAQP style: K5ZD)", lg.Qsos[4].Call == "K5ZD" && lg.Qsos[3].Call == "K5ZD");
+            Check("Cabrillo: QSOs are sorted by time", lg.Qsos[0].Utc <= lg.Qsos[1].Utc && lg.Qsos[3].Utc <= lg.Qsos[4].Utc && lg.First == lg.Qsos[0].Utc);
+            LogData gx = LogFile.Parse("START-OF-LOG: 3.0\nQSO: 14025 CW 2024-11-23 0001 N1TA 599 FN32 DL1ABC 599 JO62\nEND-OF-LOG:");
+            Check("Cabrillo: a grid square in the exchange beats the callsign guess", gx.Qsos.Count == 1 && gx.Qsos[0].Located && gx.Qsos[0].Where == "JO62");
+
+            // ---- ADIF import ----
+            string adi = "ADIF Export\n<ADIF_VER:5>3.1.0 <PROGRAMID:4>TEST <EOH>\n" +
+                "<CALL:4>W1AW <QSO_DATE:8>20241123 <TIME_ON:4>0301 <BAND:3>20m <MODE:2>CW <GRIDSQUARE:4>FN31 <MY_GRIDSQUARE:6>FN32pb <STATION_CALLSIGN:4>N1TA <EOR>\n" +
+                "<CALL:6>DL1ABC <QSO_DATE:8>20241123 <TIME_ON:6>041500 <FREQ:6>7.0125 <MODE:3>SSB <EOR>\n" +
+                "<CALL:5>XX9ZZ <QSO_DATE:8>20241123 <TIME_ON:4>0500 <BAND:2>2m <EOR>\n" +
+                "<CALL:5>K1ABC <QSO_DATE:8>2024 <TIME_ON:4>0500 <BAND:3>40m <EOR>\n";
+            LogData ad = LogFile.Parse(adi);
+            Check("ADIF: 2 QSOs read; VHF and bad date skipped", ad.Format == "ADIF" && ad.Qsos.Count == 2 && ad.NotHf == 1 && ad.BadTime == 1);
+            Check("ADIF: my call/grid from the record, QSO grid beats callsign lookup (FN31)", ad.MyCall == "N1TA" && ad.MyGrid == "FN32pb" && ad.Qsos[0].Where == "FN31" && ad.Qsos[0].Located);
+            Check("ADIF: FREQ in MHz (7.0125) and 6-digit time (04:15:00); BAND 20m -> 14.175 centre", Near(ad.Qsos[1].Mhz, 7.0125, 1e-9) && ad.Qsos[1].Utc == new DateTime(2024, 11, 23, 4, 15, 0) && Near(ad.Qsos[0].Mhz, 14.175, 1e-6));
+            bool bad = false; try { LogFile.Parse("this is not a log"); } catch (FormatException) { bad = true; }
+            Check("a file that is neither Cabrillo nor ADIF is refused cleanly", bad);
+
+            // ---- look-back evaluation (FN32pb, SFI 150, A 6, K 2) ----
+            LogAnalysis.Evaluate(lg, 42.06, -72.71, 150, 6, 2);
+            Check("evaluation: 144 km W1AW QSO is too close to judge (NVIS / ground wave), not a 'miss'", lg.TooClose == 1 && !lg.Qsos[0].Evaluated);
+            Check("evaluation: 40 m to Germany at 01:05Z OPEN; 15 m to Texas at 15:00Z OPEN", lg.Qsos[1].Evaluated && lg.Qsos[1].State == BandState.Open && lg.Qsos[3].Evaluated && lg.Qsos[3].State == BandState.Open);
+            Check("evaluation: 10 m to Japan at 02:10Z (night, SFI 150) is a MISS (CLOSED)", lg.Qsos[2].Evaluated && lg.Qsos[2].State == BandState.Closed);
+            int eo, em, ec, eu; LogAnalysis.Count(lg.Qsos, out eo, out em, out ec, out eu);
+            Check("counts: 3 open, 0 marginal, 1 closed, 1 not judged", eo == 3 && em == 0 && ec == 1 && eu == 1);
+            Check("hour window: 01Z holds exactly the DL1ABC QSO", LogAnalysis.InHour(lg, new DateTime(2024, 11, 23, 1, 0, 0)).Count == 1 && LogAnalysis.InHour(lg, new DateTime(2024, 11, 23, 1, 0, 0))[0].Call == "DL1ABC");
+            string rpt = LogAnalysis.Report(lg, "FN32pb", 42.06, -72.71, 150, 6, 2, "test");
+            Check("report: has the how-to-read note, overall counts, by-band, by-hour and the miss list", rpt.Contains("HOW TO READ THIS") && rpt.Contains("MISSED  (CLOSED)") && rpt.Contains("BY BAND") && rpt.Contains("BY HOUR (UTC)") && rpt.Contains("LARGEST MISSES") && rpt.Contains("JA1ABC"));
+            Check("report: states the 1000 km / 621 mi exclusion and shows km and miles", rpt.Contains("1000 km") && rpt.Contains("621 mi"));
+
             Cond q = new Cond(); q.Month = 6; q.Day = 21; q.Hour = 17; q.Sfi = 130; q.A = 5; q.K = 1; q.Derive();
             double day = Prop.PathMof(Prop.Rad(42), Prop.Rad(-72), Prop.Rad(51), Prop.Rad(0), false, q);
             q.Hour = 5; double lofNight = Prop.PathLof(Prop.Rad(42), Prop.Rad(-72), Prop.Rad(51), Prop.Rad(0), false, q);
