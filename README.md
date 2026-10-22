@@ -142,7 +142,7 @@ Higher bands imply the lower ones. Red on a MOF map means 20 and 15 are open too
 | MOF engine | adaptation of MINIMUF-85 | MINIMUF 3.5 (the part I could verify) |
 | LOF engine | Piggott / George / Samuel / Bradley, via Radio Netherlands | simple absorption model, tuned by me |
 | Solar data | type it in | NOAA fetch, or type it in |
-| Contest-log overlay (MMPRINT), replay files | yes | no |
+| Contest-log overlay (MMPRINT), replay files | yes | yes |
 | Runs on | DOS / Win16/32 | anything with .NET Framework 4 |
 
 **Expect the maps to look *similar*, not identical.** If they disagree, the original has a decade of contest logs behind its tuning and I have a verified Navy algorithm and a good attitude. Use both.
