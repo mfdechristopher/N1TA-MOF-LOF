@@ -60,19 +60,41 @@ Contesters can import a log and see how well the prediction matched what actuall
 
 1. **Log → Open a Cabrillo or ADIF log...** (or give the file on the command line, drag it onto the exe, or use "Open with"). Cabrillo (any contest) and ADIF (`.adi`) both work. A [synthetic sample](docs/sample-log-synthetic.cbr) is included for trying it out.
 2. The program asks for the solar flux, A and K **for the log's own period**. NOAA's automatic data only covers today, so type in that weekend's numbers. The boxes start with today's values, which are close for a recent log.
-3. The map jumps to the first hour of the log. Every QSO of the hour on screen is a **dot in its band's colour**: 20 and 40 m blue, 15 and 80 m green, 10 and 160 m red (30, 60, 17 and 12 m borrow the nearest). A **white X** on a dot means the prediction called that band **closed** at that time on that path, yet you worked it.
+
+![The solar-data prompt](docs/screenshot-log-solar.png)
+
+*The prompt that appears when a log is opened, here with the starting values 150, 6 and 2.*
+
+3. The map jumps to the first hour of the log. Every QSO of the hour on screen is a **dot in its band's colour**: 20 and 40 m blue, 15 and 80 m green, 10 and 160 m red (30, 60, 17 and 12 m borrow the nearest). While a log is open the map itself is drawn in **darker shades of the same three colours**, so the bright dots stand out from it. A **white X** on a dot means the prediction called that band **closed** at that time on that path, yet you worked it.
 4. **Enter / Backspace** step through the log hour by hour, **A** animates the whole contest, **Home / End** jump to the first and last QSO. Hover a dot for its call, band, distance (km and miles) and what the prediction said. The status bar counts the hour's QSOs: open, marginal, **MISSED**.
 5. **Log → Analysis report...** gives the totals, a per-band table, a per-hour table and the twelve biggest misses, and saves as a text file.
 
 ![Log analysis: QSO dots for one hour](docs/screenshot-log-map.png)
 
-*One hour of the synthetic sample. Blue dots are 40 m QSOs, the red dot with the X is a 10 m QSO the prediction called closed.*
+*17:00 UTC on day one of the synthetic sample: five QSOs, each a dot in its band's colour. Red, 10 m: Ontario (Canada), Tanzania and Italy. Green, 15 m: the Netherlands. Blue, 20 m: Hungary. The two dots with a white X, Italy on 10 m and the Netherlands on 15 m, are QSOs the prediction called closed at that moment. The Ontario QSO is only 672 km (418 mi) away, under the 1000 km (621 mi) cutoff, so it is not judged. The status bar counts the other four: open 1 (Tanzania), marginal 1 (Hungary), MISSED 2.*
 
 ![Log analysis report](docs/screenshot-log-report.png)
+
+*The top of the report for the synthetic sample: 173 QSOs read and 167 analysed (6 were under 1000 km and left out), the overall counts of 130 open, 8 marginal and 29 missed, and the start of the per-band table. The sample is synthetic, so these figures say nothing about the prediction's real accuracy.*
 
 **What this can and can't tell you.** A completed QSO proves a band was open. It cannot prove that the bands you did *not* work were closed. So the report measures **misses** (predicted closed, but you worked it), not false alarms.
 
 **How worked stations are placed.** A Cabrillo file only has callsigns, so each station is put at its DXCC entity's location (AD1C's country files), or at the centre of its **call area** for the US and Canada (a single point for a whole country is far too coarse for propagation), or at its **grid square** if the log has one. That is approximate, and the report says so. QSOs closer than **1000 km (621 mi)** are left out of the judgement, because ground wave and NVIS are not part of an F2-layer model and would show up as false misses.
+
+### Keeping the callsign database current
+
+New prefixes and special-event callsigns are added to AD1C's Country Files almost every week, and a newer copy places more of a log's stations correctly. **Log → Update callsign database (cty.dat)...** opens a small window that shows which version is in use, how old it is, and has a button: **Download the latest now**.
+
+![Updating the callsign database](docs/screenshot-cty-update.png)
+
+*The window right after a successful update. This screenshot was taken against a local stand-in server serving a test file, so the version number (20261015) is a test value, not a real release. It shows what you would see: the new version and its age, the source, and the note that the open log was re-placed and re-analysed.*
+
+* It downloads from AD1C's stable "latest" address, `https://www.country-files.com/bigcty/cty.dat`.
+* **The program contacts that site only when you click the button.** There is no background checking.
+* The file is **checked before it is used**: size, format, at least 300 countries, and spot checks that well-known callsigns still resolve to the right country. A bad or truncated file is refused and nothing changes.
+* The new copy is saved in your settings folder (`%APPDATA%\N1TA-MOFLOF\cty.dat`) and used from then on, in preference to the copy built into the program. If it is ever missing or damaged the built-in copy is used automatically, and **Use the built-in copy** puts things back by hand.
+* If a log is open, its stations are re-placed and the analysis redone straight away.
+* If the server is unreachable you get a plain message ("Could not download ... Nothing was changed.") and everything carries on as before.
 
 If the log was made from a different location than the one set here (it knows from the log's grid), the program offers to use the log's location, and puts yours back when you close the log. **Log → Close log** returns everything to how it was.
 
@@ -155,11 +177,12 @@ src/Bands.cs        band tables, the blue/green/red colour scheme, open/marginal
 src/CallDb.cs       callsign -> location (AD1C cty.dat, embedded)
 src/LogFile.cs      Cabrillo and ADIF import
 src/LogAnalysis.cs  per-QSO evaluation and the report
+src/CtyUpdate.cs    the "download the latest cty.dat" button (runs only when clicked)
 src/MainForm.cs     the window, the map renderer, settings
 src/StartDialog.cs  the one input screen: grid, date/time, solar data
 src/SelfTest.cs     --selftest
 res/coast.txt       Natural Earth 110m coastline, reduced
-res/cty.dat         AD1C country files (callsign prefixes and entity locations)
+res/cty.dat         AD1C country files (Big CTY): the built-in copy, replaceable from the Log menu
 build.sh            one-line build
 ```
 

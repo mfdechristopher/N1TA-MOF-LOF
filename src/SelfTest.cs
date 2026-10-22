@@ -1,6 +1,7 @@
 // "N1TA_MOFLOF.exe --selftest": checks the engine against the Navy's published sample
 // and the NOAA parsers against sample text. Useful after any edit.
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Text;
 using System.Windows.Forms;
@@ -117,6 +118,70 @@ namespace N1TA.MofLof
             string rpt = LogAnalysis.Report(lg, "FN32pb", 42.06, -72.71, 150, 6, 2, "test");
             Check("report: has the how-to-read note, overall counts, by-band, by-hour and the miss list", rpt.Contains("HOW TO READ THIS") && rpt.Contains("MISSED  (CLOSED)") && rpt.Contains("BY BAND") && rpt.Contains("BY HOUR (UTC)") && rpt.Contains("LARGEST MISSES") && rpt.Contains("JA1ABC"));
             Check("report: states the 1000 km / 621 mi exclusion and shows km and miles", rpt.Contains("1000 km") && rpt.Contains("621 mi"));
+
+            // ---- callsign database update (cty.dat) ----
+            string builtIn = CallDb.BuiltInText();
+            CtyDb vdb; string vprob;
+            Check("cty validate: the built-in file passes (version, 300+ countries, spot checks)", CallDb.Validate(builtIn, out vdb, out vprob) && vdb.Version >= 20260101 && vdb.Entities >= 300);
+            Check("cty validate: rejects empty, tiny and junk files", !CallDb.Validate("", out vdb, out vprob) && !CallDb.Validate("hello", out vdb, out vprob) && !CallDb.Validate(new string('x', 80000), out vdb, out vprob));
+            Check("cty validate: rejects a truncated file (too few countries)", !CallDb.Validate(builtIn.Substring(0, builtIn.Length / 5), out vdb, out vprob) && vprob.Length > 0);
+            Check("cty validate: rejects a file whose entity names changed (US refinement would silently break)", !CallDb.Validate(builtIn.Replace("United States:", "USA:"), out vdb, out vprob) && vprob.Contains("United States"));
+            Check("cty version/age helpers", CallDb.VersionOf("=VER20260714,") == 20260714 && CallDb.VersionOf("nothing") == 0 && CallDb.AgeDays(20000101) > 9000 && CallDb.AgeDays(5) == -1);
+
+            string tmpDir = Path.Combine(Path.GetTempPath(), "n1ta_selftest_" + Environment.TickCount);
+            CallDb.DataDirOverride = tmpDir; CallDb.ResetForTest();
+            string newer = builtIn.Replace("=VER20260714", "=VER20990101");
+            string inst; bool ok1 = CallDb.Install(newer, out inst);
+            double ila, ilo; string iw;
+            Check("cty install: a valid newer file is saved, becomes the one in use, and lookups still work", ok1 && File.Exists(CallDb.UserFile) && CallDb.Version == 20990101 && CallDb.Source.StartsWith("your") && CallDb.Lookup("DL1ABC", out ila, out ilo, out iw));
+            CallDb.ResetForTest(); int vReload = CallDb.Version;
+            Check("cty install: the saved copy is picked up again on the next start", vReload == 20990101 && CallDb.Source.StartsWith("your"));
+            File.WriteAllText(CallDb.UserFile, "this is not a country file");
+            CallDb.ResetForTest(); int vFallback = CallDb.Version;
+            Check("cty fallback: a corrupt saved file is ignored and the built-in copy is used", vFallback >= 20260101 && vFallback != 20990101 && CallDb.Source.StartsWith("built") && CallDb.Lookup("DL1ABC", out ila, out ilo, out iw));
+            string badInst; Check("cty install: an invalid file is refused and nothing is written over the good one", !CallDb.Install("junk", out badInst) && badInst.Length > 0);
+            CallDb.Install(newer, out inst); CallDb.UseBuiltIn();
+            Check("cty use built-in: deletes the downloaded copy and goes back", !File.Exists(CallDb.UserFile) && CallDb.Version < 20990101 && CallDb.Source.StartsWith("built"));
+            try { Directory.Delete(tmpDir, true); } catch { }
+            CallDb.DataDirOverride = null; CallDb.ResetForTest();
+
+            // a real HTTP download against a throwaway local server (a normal user's file comes from country-files.com)
+            System.Net.Sockets.TcpListener lsn = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0); lsn.Start();
+            int sport = ((System.Net.IPEndPoint)lsn.LocalEndpoint).Port; byte[] body = System.Text.Encoding.GetEncoding("ISO-8859-1").GetBytes(builtIn);
+            System.Threading.Thread srv = new System.Threading.Thread(delegate ()
+            {
+                for (int i = 0; i < 2; i++)
+                {
+                    try
+                    {
+                        using (System.Net.Sockets.TcpClient tc = lsn.AcceptTcpClient())
+                        {
+                            System.Net.Sockets.NetworkStream ns = tc.GetStream(); byte[] rb = new byte[4096]; ns.Read(rb, 0, rb.Length);
+                            string head = i == 0 ? "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n" : "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            byte[] hb = System.Text.Encoding.ASCII.GetBytes(head); ns.Write(hb, 0, hb.Length); if (i == 0) ns.Write(body, 0, body.Length); ns.Flush();
+                        }
+                    }
+                    catch { }
+                }
+            });
+            srv.IsBackground = true; srv.Start();
+            Environment.SetEnvironmentVariable("N1TA_CTY_URL", "http://127.0.0.1:" + sport + "/bigcty/cty.dat");
+            string derr; string got = CtyUpdate.Download(out derr);
+            Check("cty download: fetches the file over HTTP, byte for byte (" + (got == null ? derr : (got.Length + " chars")) + ")", got != null && got == builtIn && CallDb.VersionOf(got) == CallDb.Version);
+            string derr2; string got2 = CtyUpdate.Download(out derr2);
+            Check("cty download: a 404 gives a plain-language error and no data (" + derr2 + ")", got2 == null && derr2.Contains("404"));
+            lsn.Stop();
+            string derr3; string got3 = CtyUpdate.Download(out derr3);
+            Check("cty download: an unreachable server gives an error and no data", got3 == null && derr3.Length > 0);
+            Environment.SetEnvironmentVariable("N1TA_CTY_URL", null);
+            Check("cty download: the default address is AD1C's stable 'latest' file", CtyUpdate.Url == "https://www.country-files.com/bigcty/cty.dat");
+
+            // re-placing an open log after the database changes
+            LogData rl = new LogData(); Qso r1 = new Qso(); r1.Call = "DL1ABC"; r1.Utc = new DateTime(2025, 11, 29, 12, 0, 0); r1.Mhz = 14.025;
+            Qso r2 = new Qso(); r2.Call = "DL1ABC"; r2.Utc = r1.Utc; r2.Mhz = 14.025; r2.Lat = 10; r2.Lon = 20; r2.Located = true; r2.FromGrid = true; r2.Where = "JK00";
+            Qso r3 = new Qso(); r3.Call = "XX0X"; r3.Utc = r1.Utc; r3.Mhz = 14.025; rl.Qsos.Add(r1); rl.Qsos.Add(r2); rl.Qsos.Add(r3);
+            LogFile.Relocate(rl);
+            Check("relocate: callsign QSOs are re-placed, grid-located QSOs keep their grid, unknowns counted", r1.Located && r1.Where.Contains("Germany") && r2.Where == "JK00" && Near(r2.Lat, 10, 1e-9) && !r3.Located && rl.Unlocated == 1);
 
             Cond q = new Cond(); q.Month = 6; q.Day = 21; q.Hour = 17; q.Sfi = 130; q.A = 5; q.K = 1; q.Derive();
             double day = Prop.PathMof(Prop.Rad(42), Prop.Rad(-72), Prop.Rad(51), Prop.Rad(0), false, q);

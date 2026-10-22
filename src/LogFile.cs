@@ -15,7 +15,7 @@ namespace N1TA.MofLof
     public class Qso
     {
         public DateTime Utc; public double Mhz; public string Call = "", Mode = "", Where = "";
-        public double Lat, Lon; public bool Located;                      // location of the worked station
+        public double Lat, Lon; public bool Located, FromGrid;           // location of the worked station, and whether the log itself gave it (a grid square)
         public bool Evaluated; public BandState State; public bool LongPath; public double Mof, Lof, DistKm;   // filled by LogAnalysis
     }
 
@@ -58,6 +58,20 @@ namespace N1TA.MofLof
             else if (Regex.IsMatch(text, "<eor>|<eoh>", RegexOptions.IgnoreCase)) log = Adif(text);
             else throw new FormatException("This file does not look like a Cabrillo or ADIF log.");
             Finish(log); return log;
+        }
+
+        // Places every QSO that was located by callsign again, e.g. after the country file has been updated.
+        // QSOs the log itself located (grid squares) are left alone.
+        public static void Relocate(LogData log)
+        {
+            log.Unlocated = 0;
+            foreach (Qso q in log.Qsos)
+            {
+                if (q.FromGrid) continue;
+                double la, lo; string w;
+                if (CallDb.Lookup(q.Call, out la, out lo, out w)) { q.Lat = la; q.Lon = lo; q.Where = w; q.Located = true; }
+                else { q.Located = false; q.Where = ""; log.Unlocated++; }
+            }
         }
 
         static void Finish(LogData log)
@@ -107,7 +121,7 @@ namespace N1TA.MofLof
             Qso q = new Qso(); q.Utc = when; q.Mhz = mhz; q.Mode = t[2].ToUpperInvariant(); q.Call = t[idx].ToUpperInvariant();
             if (log.MyCall.Length == 0) log.MyCall = mine;
             for (int i = idx + 1; i < t.Length; i++)       // grid-square exchanges (VHF-style contests) beat the callsign guess
-                if (GridRx.IsMatch(t[i])) { double la, lo; if (Grid.TryParse(t[i], out la, out lo)) { q.Lat = la; q.Lon = lo; q.Where = Grid.Normalize(t[i]); q.Located = true; } break; }
+                if (GridRx.IsMatch(t[i])) { double la, lo; if (Grid.TryParse(t[i], out la, out lo)) { q.Lat = la; q.Lon = lo; q.Where = Grid.Normalize(t[i]); q.Located = true; q.FromGrid = true; } break; }
             log.Qsos.Add(q);
         }
 
@@ -167,7 +181,7 @@ namespace N1TA.MofLof
 
             Qso q = new Qso(); q.Utc = when; q.Mhz = mhz; q.Call = call; q.Mode = Get(r, "MODE").ToUpperInvariant();
             string gs = Get(r, "GRIDSQUARE"); double la, lo;
-            if (gs.Length >= 4 && Grid.TryParse(gs, out la, out lo)) { q.Lat = la; q.Lon = lo; q.Where = Grid.Normalize(gs); q.Located = true; }
+            if (gs.Length >= 4 && Grid.TryParse(gs, out la, out lo)) { q.Lat = la; q.Lon = lo; q.Where = Grid.Normalize(gs); q.Located = true; q.FromGrid = true; }
             log.Qsos.Add(q);
         }
     }

@@ -166,6 +166,8 @@ namespace N1TA.MofLof
             miLogReport = new MenuItem("&Analysis report...", delegate { ShowLogReport(); }); lg.MenuItems.Add(miLogReport);
             miLogClose = new MenuItem("&Close log", delegate { CloseLog(); }); lg.MenuItems.Add(miLogClose);
             lg.MenuItems.Add(new MenuItem("-"));
+            lg.MenuItems.Add(new MenuItem("&Update callsign database (cty.dat)...", delegate { ShowCtyDialog(); }));
+            lg.MenuItems.Add(new MenuItem("-"));
             miLogFirst = new MenuItem("Go to &first QSO\tHome", delegate { GoToLog(true); }); lg.MenuItems.Add(miLogFirst);
             miLogLast = new MenuItem("Go to &last QSO\tEnd", delegate { GoToLog(false); }); lg.MenuItems.Add(miLogLast);
 
@@ -430,6 +432,70 @@ namespace N1TA.MofLof
                 f.Controls.Add(t); f.Controls.Add(p); t.Select(0, 0); f.ShowDialog(this);
             }
         }
+        // ---- callsign database (cty.dat) ----
+        // Re-places the open log's stations after the database changed, and redraws.
+        string RelocateOpenLog()
+        {
+            if (log == null) return "Logs opened from now on use it.";
+            LogFile.Relocate(log); LogAnalysis.Evaluate(log, qLat, qLon, logSfi, logA, logK); Recompute();
+            return "The open log was re-placed and re-analysed with it.";
+        }
+
+        void ShowCtyDialog()
+        {
+            using (Form f = new Form())
+            {
+                f.Text = "Callsign database (cty.dat)"; f.FormBorderStyle = FormBorderStyle.FixedDialog; f.MaximizeBox = f.MinimizeBox = false; f.ShowInTaskbar = false;
+                f.StartPosition = FormStartPosition.CenterParent; f.ClientSize = new Size(540, 330);
+                Label head = new Label(); head.Left = 14; head.Top = 12; head.Width = 512; head.Text = "In use:"; head.Font = new Font(f.Font, FontStyle.Bold); f.Controls.Add(head);
+                Label info = new Label(); info.Left = 14; info.Top = 32; info.Width = 512; info.Height = 36; info.Text = CallDb.Describe(); f.Controls.Add(info);
+                Label why = new Label(); why.Left = 14; why.Top = 76; why.Width = 512; why.Height = 112;
+                why.Text = "AD1C's Country Files say which callsign prefixes belong to which country. New prefixes and special-event callsigns are added almost every week, so a newer copy places more of a log's stations correctly.\r\n\r\nThe button downloads the current file from www.country-files.com. The program contacts that site only when you click it. The file is checked before it is used, and nothing changes if the download fails.";
+                f.Controls.Add(why);
+                Label status = new Label(); status.Left = 14; status.Top = 198; status.Width = 512; status.Height = 58; f.Controls.Add(status);
+                Button dl = new Button(); dl.Text = "Download the latest now"; dl.Left = 14; dl.Top = 284; dl.Width = 190; dl.Height = 28; f.Controls.Add(dl);
+                Button bi = new Button(); bi.Text = "Use the built-in copy"; bi.Left = 212; bi.Top = 284; bi.Width = 150; bi.Height = 28; f.Controls.Add(bi);
+                Button cl = new Button(); cl.Text = "Close"; cl.Left = 446; cl.Top = 284; cl.Width = 80; cl.Height = 28; cl.Click += delegate { f.Close(); }; f.Controls.Add(cl);
+                f.CancelButton = cl;
+                bi.Enabled = CallDb.Source.StartsWith("your");
+                dl.Click += delegate
+                {
+                    dl.Enabled = bi.Enabled = false; status.Text = "Downloading from " + CtyUpdate.Url + " ...";
+                    Thread t = new Thread(delegate ()
+                    {
+                        string err; string text = CtyUpdate.Download(out err);
+                        try { f.BeginInvoke(new MethodInvoker(delegate { CtyDownloaded(text, err, info, status, dl, bi); })); } catch { }
+                    });
+                    t.IsBackground = true; t.Start();
+                };
+                bi.Click += delegate
+                {
+                    CallDb.UseBuiltIn(); info.Text = CallDb.Describe(); bi.Enabled = false;
+                    status.Text = "Back to the copy built into the program. " + RelocateOpenLog();
+                };
+                f.ShowDialog(this);
+            }
+        }
+
+        void CtyDownloaded(string text, string err, Label info, Label status, Button dl, Button bi)
+        {
+            dl.Enabled = true;
+            if (text == null) status.Text = "Could not download: " + err + ".\r\nNothing was changed.";
+            else
+            {
+                int nv = CallDb.VersionOf(text), cv = CallDb.Version;
+                if (nv > 0 && nv == cv) status.Text = "You already have the latest version (" + cv + ").";
+                else if (nv > 0 && nv < cv) status.Text = "The server's copy (version " + nv + ") is older than the one in use (" + cv + "), so nothing was changed.";
+                else
+                {
+                    string problem;
+                    if (CallDb.Install(text, out problem)) status.Text = "Updated from version " + cv + " to " + nv + ". " + RelocateOpenLog();
+                    else status.Text = "The downloaded file was rejected: " + problem + ".\r\nNothing was changed.";
+                }
+            }
+            info.Text = CallDb.Describe(); bi.Enabled = CallDb.Source.StartsWith("your");
+        }
+
         string QsoText(Qso q)
         {
             string l1 = string.Format(CultureInfo.InvariantCulture, "QSO {0}  {1:0.000} MHz ({2})  {3:yyyy-MM-dd HH:mm}Z  {4}  {5:0} km / {6:0} mi", q.Call, q.Mhz, Bands.Label(q.Mhz), q.Utc, q.Where, q.DistKm, q.DistKm * MiPerKm);
@@ -472,6 +538,9 @@ namespace N1TA.MofLof
 
         // ================= drawing =================
         static readonly int[] Pal = { unchecked((int)0xFF000000), unchecked((int)0xFF2846FF), unchecked((int)0xFF00BE00), unchecked((int)0xFFD20000) };
+        // While a log is open the map is drawn in darker shades of the SAME three colours, so the bright QSO dots stand out from it.
+        static readonly int[] PalDim = { unchecked((int)0xFF000000), unchecked((int)0xFF16268C), unchecked((int)0xFF006800), unchecked((int)0xFF740000) };
+        static readonly Color[] DimColors = { Color.FromArgb(0x16, 0x26, 0x8C), Color.FromArgb(0, 0x68, 0), Color.FromArgb(0x74, 0, 0) };
         static int MofLevel(double v) { return v >= 28.5 ? 3 : (v >= 21.2 ? 2 : (v >= 14.15 ? 1 : 0)); }
         static int LofLevel(double v) { return v <= 1.85 ? 3 : (v <= 3.6 ? 2 : (v <= 7.1 ? 1 : 0)); }
         bool IsMof { get { return mode == Mode.MofShort || mode == Mode.MofLong || mode == Mode.MofComp || mode == Mode.Mof3k; } }
@@ -525,7 +594,8 @@ namespace N1TA.MofLof
             int W = map.ClientSize.Width, H = map.ClientSize.Height; if (W < 40 || H < 40) return;
             if (proj == Proj.Rect) { mw = Math.Min(W, 2 * H); mh = mw / 2; ox = (W - mw) / 2; oy = (H - mh) / 2; }
             else { cx = W / 2; cy = H / 2; rad = Math.Min(W, H) / 2 - 3; }
-            int[] px = new int[W * H]; for (int i = 0; i < px.Length; i++) px[i] = Pal[0];
+            int[] pal = log != null ? PalDim : Pal;
+            int[] px = new int[W * H]; for (int i = 0; i < px.Length; i++) px[i] = pal[0];
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++)
                 {
@@ -535,7 +605,7 @@ namespace N1TA.MofLof
                     int lvl; bool st; CellColor(cj * md.Nx + ci, out lvl, out st);
                     if (lvl == 0) continue;
                     if (st && ((x / 2) & 1) == 1) continue;
-                    px[y * W + x] = Pal[lvl];
+                    px[y * W + x] = pal[lvl];
                 }
             Bitmap bmp = new Bitmap(W, H, PixelFormat.Format32bppArgb);
             BitmapData bd = bmp.LockBits(new Rectangle(0, 0, W, H), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
@@ -602,17 +672,19 @@ namespace N1TA.MofLof
             }
             if (log != null)
             {
-                // Each dot: band colour in the middle, a black ring, then a white halo, so it reads on any map colour
-                // (a blue 40 m dot on the blue 20 m region would otherwise vanish). A white X marks a predicted-closed QSO.
-                using (Pen halo = new Pen(Color.White, 1.5f)) using (Pen ring = new Pen(Color.Black, 2f)) using (Pen xp = new Pen(Color.White, 2f))
+                // Each dot: a disc in the band's colour with a thin black edge, a white ring round it, and a black outline outside that.
+                // The white ring keeps a blue 40 m dot visible on the blue 20 m region (same colour as the map behind it).
+                // A white X across the disc marks a QSO the prediction called closed.
+                using (Pen xp = new Pen(Color.White, 2.2f))
                     foreach (Qso q in CurrentQsos())
                     {
                         if (!q.Located) continue;
                         float qx0, qy0; Forward(q.Lat, q.Lon, out qx0, out qy0);
+                        g.FillEllipse(Brushes.Black, qx0 - 9f, qy0 - 9f, 18, 18);            // outer outline
+                        g.FillEllipse(Brushes.White, qx0 - 7.5f, qy0 - 7.5f, 15, 15);        // white ring
+                        g.FillEllipse(Brushes.Black, qx0 - 5.5f, qy0 - 5.5f, 11, 11);        // crisp edge, so the disc is a solid dot even on its own colour
                         using (Brush b = new SolidBrush(Bands.ColorOf(q.Mhz))) g.FillEllipse(b, qx0 - 4.5f, qy0 - 4.5f, 9, 9);
-                        g.DrawEllipse(ring, qx0 - 5.5f, qy0 - 5.5f, 11, 11);
-                        g.DrawEllipse(halo, qx0 - 7.5f, qy0 - 7.5f, 15, 15);
-                        if (q.Evaluated && q.State == BandState.Closed) { g.DrawLine(xp, qx0 - 3.5f, qy0 - 3.5f, qx0 + 3.5f, qy0 + 3.5f); g.DrawLine(xp, qx0 - 3.5f, qy0 + 3.5f, qx0 + 3.5f, qy0 - 3.5f); }
+                        if (q.Evaluated && q.State == BandState.Closed) { g.DrawLine(xp, qx0 - 3.2f, qy0 - 3.2f, qx0 + 3.2f, qy0 + 3.2f); g.DrawLine(xp, qx0 - 3.2f, qy0 + 3.2f, qx0 + 3.2f, qy0 - 3.2f); }
                     }
             }
             float qx, qy; Forward(qLat, qLon, out qx, out qy);
@@ -635,8 +707,10 @@ namespace N1TA.MofLof
             {
                 List<Qso> cur = CurrentQsos(); int o, mg, c, u; LogAnalysis.Count(cur, out o, out mg, out c, out u);
                 pNoaa.Text = string.Format("LOG {0}: {1} QSOs this hour (open {2}, marginal {3}, MISSED {4})  |  solar data entered for this log (Log menu for the report)", log.MyCall.Length > 0 ? log.MyCall : "(no call)", cur.Count, o, mg, c);
-                List<string> lb = new List<string>(legend.Labels); lb.Add("dot = QSO, X = predicted closed"); legend.Labels = lb.ToArray();
-                List<Color> cl = new List<Color>(legend.Col); cl.Add(Color.Empty); legend.Col = cl.ToArray();
+                List<string> lb = new List<string>(legend.Labels); lb.Add("bright dot = QSO (map dimmed), X = predicted closed"); legend.Labels = lb.ToArray();
+                List<Color> cl = new List<Color>(legend.Col); cl.Add(Color.Empty);
+                for (int i = 0; i < 3 && i < cl.Count; i++) cl[i] = DimColors[i];          // legend swatches match the dimmed map
+                legend.Col = cl.ToArray();
             }
             legend.Invalidate();
         }
@@ -725,7 +799,7 @@ namespace N1TA.MofLof
 
     public static class HelpText
     {
-        public static string Version = "1.2.0";
+        public static string Version = "1.3.0";
         public static string About =
             "N1TA MOF/LOF " + Version + "\r\n\r\n" +
             "A from-scratch rewrite of the idea behind K1TTT's MOF/LOF\r\n" +
@@ -756,6 +830,9 @@ namespace N1TA.MofLof
             "Step through the log with Enter/Backspace, animate with A. Hover a dot for its details. A QSO proves a\r\n" +
             "band was open but cannot prove the others were closed, so the report counts misses, not false alarms.\r\n" +
             "QSOs under 1000 km (621 mi) are not judged: ground wave and NVIS are not part of an F2 model.\r\n\r\n" +
+            "Log > Update callsign database downloads AD1C's latest country file (callsign prefixes change nearly\r\n" +
+            "every week). It is checked before use, kept in your settings folder, and can be switched back to the\r\n" +
+            "built-in copy. The program contacts that site only when you click the button.\r\n\r\n" +
             "Future dates in automatic mode use NOAA's 27-day outlook when available (up to 27 days ahead).\r\nBeyond that, or for past dates, choose Manual and enter the SFI/A/K you want.\r\nA is the mean of the last 24 hours of NOAA 3-hourly values.";
     }
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+- **Added: update the callsign database with one click.** Log > Update callsign database (cty.dat)... shows the version in use and its age, and downloads AD1C's latest Big CTY file from country-files.com when you click the button. Never contacts the site otherwise.
+- The download is validated before use (size, format, 300+ countries, spot checks including that the US/Canada entity names still match); a bad file changes nothing. Kept in the settings folder, preferred over the built-in copy, with automatic fallback to the built-in copy if it is missing or damaged, and a "use the built-in copy" button.
+- An open log is re-placed and re-analysed immediately after an update.
+- The built-in copy is now the full Big CTY (version 20260714) instead of the smaller standard file.
+- **Fixed: QSO dots were hard to read.** A dot whose band colour matched the map region behind it (a blue 40 m dot on the blue 20 m area) looked like an empty ring, and the documentation screenshot and caption did not match. Dots are now a band-coloured disc with a black edge, a white ring and a black outline, and **the map is drawn in darker shades of the same three colours while a log is open** so the bright dots stand out. The screenshot and caption were redone from the actual program output.
+- Self-test expanded to 74 checks (validation, install, fallback, a real HTTP download against a local server, re-placing a log).
+
 ## 1.2.0
 - **Added: log analysis.** Import a Cabrillo or ADIF log and plot its QSOs on the map hour by hour, in the program's blue / green / red band colours, marking QSOs the prediction called closed. Step with Enter/Backspace, animate with A, jump with Home/End, hover a dot for details, and open an analysis report (overall, by band, by hour, largest misses) that can be saved as text.
 - **Added:** callsign-to-location from AD1C's country files (embedded), with call-area centres for the US and Canada; grid squares in the log are used when present.
